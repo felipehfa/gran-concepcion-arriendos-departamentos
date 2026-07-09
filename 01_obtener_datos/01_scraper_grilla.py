@@ -1,38 +1,3 @@
-"""
-Scraper de Portal Inmobiliario - Arriendos (casas y departamentos)
-Comunas del Gran Concepción
-
-REQUISITOS:
-    pip install requests beautifulsoup4 pandas lxml
-
-NOTAS IMPORTANTES:
-- Portal Inmobiliario (grupo MercadoLibre) cambia frecuentemente los nombres de
-  clases CSS de sus tarjetas de resultado. Si el scraper deja de traer datos,
-  lo primero que hay que revisar es la sección `SELECTORES` más abajo:
-  entra a una página de resultados, abre el inspector (F12) y confirma los
-  nombres de clase actuales.
-- El sitio puede mostrar CAPTCHA si detecta tráfico automatizado muy agresivo.
-  Este script usa delays aleatorios y un User-Agent de navegador real para
-  reducir el riesgo, pero no lo elimina. Si te empieza a bloquear:
-    * Aumenta DELAY_MIN / DELAY_MAX
-    * Reduce la cantidad de comunas/páginas por corrida
-    * Considera usar un proxy residencial o Playwright con perfil real
-- Este script es para uso personal/investigación. Revisa los Términos de Uso
-  y robots.txt del sitio (portalinmobiliario.com/robots.txt) antes de scrapear
-  a gran escala, y no reproduzcas ni redistribuyas contenido con derechos de
-  terceros (ej. fotos) sin permiso. Nota: el robots.txt de este sitio permite
-  explícitamente el patrón de paginación `_Desde_` que usa este script
-  (Allow: /*_Desde_), pero NO usamos parámetros de orden (_OrderId_) porque
-  ese sí está bloqueado (Disallow: *_OrderId_).
-- CORRIDAS REPETIDAS (ej. todos los días): cada vez que corres el script,
-  vuelve a buscar en todas las comunas, pero:
-    1) Se detiene apenas una página completa resulte ser 100% avisos que ya
-       existían en la base de datos (asume que lo nuevo tiende a aparecer
-       antes que lo viejo en el orden por defecto del sitio).
-    2) Guarda cada página de inmediato en la BBDD (no espera a terminar todo),
-       así no se pierde nada si el script se corta a mitad de camino.
-"""
-
 import re
 import time
 import random

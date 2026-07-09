@@ -1,53 +1,3 @@
-"""
-Scraper de DETALLE - Portal Inmobiliario (Gran Concepción)
-
-Complementa al scraper de grilla (01_scraper_grilla.py). Este script:
-  1. Lee los avisos ya descubiertos en avisos_gran_concepcion.db (tabla `avisos`).
-  2. Visita cada URL individual con Playwright y extrae: descripción completa,
-     fecha de publicación, y características principales del inmueble.
-  3. Guarda cada aviso INMEDIATAMENTE (commit por aviso) en la MISMA base de
-     datos, en una tabla nueva: `avisos_detalle` (dentro de avisos_gran_concepcion.db).
-  4. Es reanudable: si se corta a mitad de camino (bloqueo, corte de luz,
-     Ctrl+C, etc.), la próxima vez que lo corras retoma solo los avisos que
-     todavía no tienen detalle guardado - no vuelve a visitar los que ya
-     procesó ni pierde lo avanzado.
-
-REQUISITOS:
-    pip install playwright pandas playwright-stealth
-    playwright install chromium   (si no lo hiciste ya para el otro scraper)
-
-    playwright-stealth es OPCIONAL pero muy recomendado: reduce varias señales
-    que delatan un navegador automatizado (navigator.webdriver, inconsistencias
-    de WebGL, etc.). Si no lo instalas, el script funciona igual pero con más
-    riesgo de bloqueo.
-
-CÓMO CORRERLO EN UN SERVIDOR SIN PANTALLA (headless obligatorio):
-- Este script está pensado para correr en tandas pequeñas vía cron (ver
-  LIMITE_POR_CORRIDA más abajo), NO para intentar procesar miles de avisos
-  de una sola sentada. Ejemplo de cron para correr cada 2 horas:
-      0 */2 * * * cd /ruta/al/proyecto/01_obtener_datos && /ruta/al/python 02_scraper_detalle.py
-- Si el sitio te bloquea con CAPTCHA, el script queda en "cooldown" (ver
-  COOLDOWN_TRAS_CAPTCHA_MINUTOS) y las siguientes corridas se saltan solas
-  hasta que pase ese tiempo - no hace falta que tú lo controles manualmente.
-
-NOTAS IMPORTANTES:
-- Este scraper es más "sensible" que el de grilla: entra a UNA página por
-  cada aviso, en vez de una página que lista 48 de una vez. Eso significa
-  muchas más visitas en total, por lo que el riesgo de bloqueo es mayor.
-  Los delays por defecto son más largos que en el scraper de grilla.
-- Si el sitio muestra CAPTCHA, el script se DETIENE de inmediato dejando
-  guardado todo lo que alcanzó a procesar, y activa un cooldown antes de
-  permitir la siguiente corrida.
-- Igual que con el otro scraper: revisa el robots.txt / Términos de Uso antes
-  de correrlo a gran escala, y no reproduzcas ni redistribuyas contenido con
-  derechos de terceros (fotos, descripciones completas de otros) sin permiso.
-- Los selectores CSS y el texto en español pueden cambiar con el tiempo. Si
-  el script deja de traer datos, revisa la sección SELECTORES y los patrones
-  RE_* más abajo.
-- Este script solo LEE de la tabla `avisos` (nunca la modifica). Solo escribe
-  en sus propias tablas `avisos_detalle` y `estado`.
-"""
-
 import re
 import json
 import time
@@ -88,7 +38,7 @@ BD_PRINCIPAL = CARPETA_SCRIPT / "avisos_gran_concepcion.db"
 DELAY_MIN = 10.0   # segundos entre cada visita a un aviso individual
 DELAY_MAX = 25.0
 
-LIMITE_POR_CORRIDA = 250   # avisos a procesar como máximo en UNA ejecución del script
+LIMITE_POR_CORRIDA = 1500   # avisos a procesar como máximo en UNA ejecución del script
                           # (usa cron para correrlo varias veces al día en vez de subir esto mucho)
 
 COOLDOWN_TRAS_CAPTCHA_MINUTOS = 60   # tiempo mínimo de espera antes de reintentar tras un bloqueo
@@ -151,6 +101,7 @@ SELECTORES_DESCRIPCION = [
 # (se loguea a nivel INFO) en vez de romper el script.
 SUBCATEGORIAS_POI = {
     "paraderos": "paraderos",
+    "estaciones de metro": "estaciones_metro",
     "jardines infantiles": "jardines_infantiles",
     "colegios": "colegios",
     "universidades": "universidades",
