@@ -1,3 +1,53 @@
+"""
+Scraper de DETALLE - Portal Inmobiliario (Gran Concepción)
+
+Complementa al scraper de grilla (01_scraper_grilla.py). Este script:
+  1. Lee los avisos ya descubiertos en avisos_gran_concepcion.db (tabla `avisos`).
+  2. Visita cada URL individual con Playwright y extrae: descripción completa,
+     fecha de publicación, y características principales del inmueble.
+  3. Guarda cada aviso INMEDIATAMENTE (commit por aviso) en la MISMA base de
+     datos, en una tabla nueva: `avisos_detalle` (dentro de avisos_gran_concepcion.db).
+  4. Es reanudable: si se corta a mitad de camino (bloqueo, corte de luz,
+     Ctrl+C, etc.), la próxima vez que lo corras retoma solo los avisos que
+     todavía no tienen detalle guardado - no vuelve a visitar los que ya
+     procesó ni pierde lo avanzado.
+
+REQUISITOS:
+    pip install playwright pandas playwright-stealth
+    playwright install chromium   (si no lo hiciste ya para el otro scraper)
+
+    playwright-stealth es OPCIONAL pero muy recomendado: reduce varias señales
+    que delatan un navegador automatizado (navigator.webdriver, inconsistencias
+    de WebGL, etc.). Si no lo instalas, el script funciona igual pero con más
+    riesgo de bloqueo.
+
+CÓMO CORRERLO EN UN SERVIDOR SIN PANTALLA (headless obligatorio):
+- Este script está pensado para correr en tandas pequeñas vía cron (ver
+  LIMITE_POR_CORRIDA más abajo), NO para intentar procesar miles de avisos
+  de una sola sentada. Ejemplo de cron para correr cada 2 horas:
+      0 */2 * * * cd /ruta/al/proyecto/01_obtener_datos && /ruta/al/python 02_scraper_detalle.py
+- Si el sitio te bloquea con CAPTCHA, el script queda en "cooldown" (ver
+  COOLDOWN_TRAS_CAPTCHA_MINUTOS) y las siguientes corridas se saltan solas
+  hasta que pase ese tiempo - no hace falta que tú lo controles manualmente.
+
+NOTAS IMPORTANTES:
+- Este scraper es más "sensible" que el de grilla: entra a UNA página por
+  cada aviso, en vez de una página que lista 48 de una vez. Eso significa
+  muchas más visitas en total, por lo que el riesgo de bloqueo es mayor.
+  Los delays por defecto son más largos que en el scraper de grilla.
+- Si el sitio muestra CAPTCHA, el script se DETIENE de inmediato dejando
+  guardado todo lo que alcanzó a procesar, y activa un cooldown antes de
+  permitir la siguiente corrida.
+- Igual que con el otro scraper: revisa el robots.txt / Términos de Uso antes
+  de correrlo a gran escala, y no reproduzcas ni redistribuyas contenido con
+  derechos de terceros (fotos, descripciones completas de otros) sin permiso.
+- Los selectores CSS y el texto en español pueden cambiar con el tiempo. Si
+  el script deja de traer datos, revisa la sección SELECTORES y los patrones
+  RE_* más abajo.
+- Este script solo LEE de la tabla `avisos` (nunca la modifica). Solo escribe
+  en sus propias tablas `avisos_detalle` y `estado`.
+"""
+
 import re
 import json
 import time
@@ -38,7 +88,7 @@ BD_PRINCIPAL = CARPETA_SCRIPT / "avisos_gran_concepcion.db"
 DELAY_MIN = 10.0   # segundos entre cada visita a un aviso individual
 DELAY_MAX = 25.0
 
-LIMITE_POR_CORRIDA = 1500   # avisos a procesar como máximo en UNA ejecución del script
+LIMITE_POR_CORRIDA = 2000   # avisos a procesar como máximo en UNA ejecución del script
                           # (usa cron para correrlo varias veces al día en vez de subir esto mucho)
 
 COOLDOWN_TRAS_CAPTCHA_MINUTOS = 60   # tiempo mínimo de espera antes de reintentar tras un bloqueo
@@ -75,6 +125,21 @@ RE_AMOBLADO = re.compile(r"Amoblado:?\s*(Sí|No)", re.IGNORECASE)
 RE_ADMITE_MASCOTAS = re.compile(r"Admite mascotas:?\s*(Sí|No)", re.IGNORECASE)
 RE_CONDOMINIO_CERRADO = re.compile(r"En condominio cerrado:?\s*(Sí|No)", re.IGNORECASE)
 
+# --- Campos nuevos: comunes a casa y departamento ---
+RE_BODEGAS = re.compile(r"Bodegas\s*(\d+)", re.IGNORECASE)
+RE_GASTOS_COMUNES = re.compile(r"Gastos comunes:?\s*\$?\s*([\d.,]+)", re.IGNORECASE)
+RE_ESTACIONAMIENTO_VISITAS = re.compile(r"Estacionamiento de visitas:?\s*(Sí|No)", re.IGNORECASE)
+RE_SOLO_FAMILIAS = re.compile(r"Solo familias:?\s*(Sí|No)", re.IGNORECASE)
+RE_MAX_HABITANTES = re.compile(r"Cantidad máxima de habitantes\s*(\d+)", re.IGNORECASE)
+RE_PISCINA = re.compile(r"Piscina:?\s*(Sí|No)", re.IGNORECASE)
+RE_QUINCHO = re.compile(r"Quincho\D{0,15}?:?\s*(Sí|No)", re.IGNORECASE)
+RE_CONSERJERIA = re.compile(r"Conserjería:?\s*(Sí|No)", re.IGNORECASE)
+
+# --- Exclusivos de departamento (quedan None en casas, es esperado) ---
+RE_ASCENSOR = re.compile(r"Ascensor:?\s*(Sí|No)", re.IGNORECASE)
+RE_PISO_UNIDAD = re.compile(r"Número de piso de la unidad\s*(\d+)", re.IGNORECASE)
+RE_DEPTOS_POR_PISO = re.compile(r"Departamentos por piso\s*(\d+)", re.IGNORECASE)
+
 # Coordenadas: vienen embebidas en un bloque de JavaScript de configuración de
 # la página (no son visibles como texto), por eso se buscan sobre el HTML
 # completo (page.content()) en vez del texto visible (inner_text()). También
@@ -94,6 +159,12 @@ SELECTORES_DESCRIPCION = [
 # ------------------------------------------------------------------
 # PUNTOS DE INTERÉS (colegios, paraderos, áreas verdes, comercios, salud)
 # ------------------------------------------------------------------
+
+# Radio máximo (en metros) para considerar un punto de interés como "cercano".
+# Los que el sitio muestra más lejos que esto se ignoran por completo (no
+# cuentan ni se usan como "el más cercano"). El sitio a veces trae POIs hasta
+# 2km, que es demasiada distancia para considerarla relevante a pie.
+RADIO_MAXIMO_POI_M = 500
 
 # Mapeo del nombre de subcategoría tal como lo muestra el sitio -> clave de
 # columna (snake_case, sin tildes). Solo estas subcategorías se guardan; si el
@@ -168,6 +239,18 @@ def inicializar_bd(ruta_bd: Path = BD_PRINCIPAL) -> sqlite3.Connection:
             amoblado                    TEXT,
             admite_mascotas             TEXT,
             condominio_cerrado          TEXT,
+            bodegas                     TEXT,
+            gastos_comunes              TEXT,
+            estacionamiento_visitas     TEXT,
+            solo_familias               TEXT,
+            max_habitantes              TEXT,
+            piscina                     TEXT,
+            quincho                     TEXT,
+            conserjeria                 TEXT,
+            ascensor                    TEXT,
+            piso_unidad                 TEXT,
+            deptos_por_piso             TEXT,
+            barrio                      TEXT,
             latitud                     TEXT,
             longitud                    TEXT,
             distancia_centro_comuna_m       REAL,
@@ -203,6 +286,9 @@ def guardar_detalle(con: sqlite3.Connection, id_aviso: str, url: str, datos: dic
         "id_aviso", "url", "descripcion", "fecha_publicacion_texto", "fecha_publicacion_aprox",
         "superficie_total_m2", "superficie_util_m2", "dormitorios", "banos", "estacionamientos",
         "antiguedad_anos", "amoblado", "admite_mascotas", "condominio_cerrado",
+        "bodegas", "gastos_comunes", "estacionamiento_visitas", "solo_familias",
+        "max_habitantes", "piscina", "quincho", "conserjeria", "ascensor",
+        "piso_unidad", "deptos_por_piso", "barrio",
         "latitud", "longitud", "distancia_centro_comuna_m", "distancia_centro_concepcion_m",
     ]
     columnas_poi = []
@@ -392,19 +478,51 @@ def _buscar_categorias_poi(nodo) -> Optional[list]:
     return None
 
 
-def extraer_puntos_interes(page) -> dict:
+def _buscar_valor_por_clave(nodo, clave: str):
+    """
+    Busca recursivamente todas las apariciones de `clave` dentro del JSON de
+    estado y devuelve el primer valor no vacío que encuentre. Se recorre todo
+    el árbol (en vez de detenerse en la primera coincidencia) porque el sitio
+    a veces repite el mismo bloque de datos en más de un lugar del JSON, y
+    alguna de esas copias puede venir vacía/None mientras otra sí trae el dato.
+    """
+    encontrados = []
+
+    def _recorrer(n):
+        if isinstance(n, dict):
+            if clave in n:
+                encontrados.append(n[clave])
+            for v in n.values():
+                _recorrer(v)
+        elif isinstance(n, list):
+            for item in n:
+                _recorrer(item)
+
+    _recorrer(nodo)
+
+    for valor in encontrados:
+        if valor:
+            return valor
+    return None
+
+
+def extraer_puntos_interes(estado: Optional[dict]) -> dict:
     """
     Extrae, para cada subcategoría conocida (colegios, paraderos, plazas,
-    etc.), cuántos hay y la distancia del más cercano. Lee el JSON embebido
-    en la página (ver extraer_json_estado_pagina) en vez del HTML visible,
-    porque el DOM solo renderiza la pestaña activa por defecto.
+    etc.), cuántos hay DENTRO DE RADIO_MAXIMO_POI_M y la distancia del más
+    cercano de esos. Los puntos más lejanos que el radio se ignoran por
+    completo (ni cuentan ni se consideran como "el más cercano") - si no hay
+    ninguno dentro del radio, queda cantidad=0 y distancia=None.
+
+    Recibe el JSON de estado ya parseado (ver extraer_json_estado_pagina) en
+    vez de `page` directamente, para no tener que parsear el JSON dos veces
+    si ya se hizo en otro punto de extraer_detalle.
     """
     resultado = {}
     for clave in SUBCATEGORIAS_POI.values():
         resultado[f"cantidad_{clave}"] = None
         resultado[f"distancia_min_m_{clave}"] = None
 
-    estado = extraer_json_estado_pagina(page)
     if not estado:
         return resultado
 
@@ -422,15 +540,18 @@ def extraer_puntos_interes(page) -> dict:
                 continue
 
             items = subcategoria.get("items", [])
-            cantidad = len(items)
 
-            distancia_min = None
-            if items:
-                texto_subtitulo = items[0].get("subtitle", {}).get("label", {}).get("text", "")
-                distancia_min = parsear_distancia_metros(texto_subtitulo)
+            distancias_dentro_del_radio = []
+            for item in items:
+                texto_subtitulo = item.get("subtitle", {}).get("label", {}).get("text", "")
+                distancia = parsear_distancia_metros(texto_subtitulo)
+                if distancia is not None and distancia <= RADIO_MAXIMO_POI_M:
+                    distancias_dentro_del_radio.append(distancia)
 
-            resultado[f"cantidad_{clave}"] = cantidad
-            resultado[f"distancia_min_m_{clave}"] = distancia_min
+            resultado[f"cantidad_{clave}"] = len(distancias_dentro_del_radio)
+            resultado[f"distancia_min_m_{clave}"] = (
+                min(distancias_dentro_del_radio) if distancias_dentro_del_radio else None
+            )
 
     return resultado
 
@@ -484,7 +605,10 @@ def extraer_detalle(page) -> dict:
 
     fecha_texto = buscar(RE_FECHA_PUBLICACION)
     coordenadas = extraer_coordenadas(page)
-    puntos_interes = extraer_puntos_interes(page)
+
+    estado = extraer_json_estado_pagina(page)
+    puntos_interes = extraer_puntos_interes(estado)
+    barrio = _buscar_valor_por_clave(estado, "neighborhood") if estado else None
 
     return {
         "descripcion": extraer_descripcion(page),
@@ -499,8 +623,20 @@ def extraer_detalle(page) -> dict:
         "amoblado": buscar(RE_AMOBLADO),
         "admite_mascotas": buscar(RE_ADMITE_MASCOTAS),
         "condominio_cerrado": buscar(RE_CONDOMINIO_CERRADO),
+        "bodegas": buscar(RE_BODEGAS),
+        "gastos_comunes": buscar(RE_GASTOS_COMUNES),
+        "estacionamiento_visitas": buscar(RE_ESTACIONAMIENTO_VISITAS),
+        "solo_familias": buscar(RE_SOLO_FAMILIAS),
+        "max_habitantes": buscar(RE_MAX_HABITANTES),
+        "piscina": buscar(RE_PISCINA),
+        "quincho": buscar(RE_QUINCHO),
+        "conserjeria": buscar(RE_CONSERJERIA),
+        "ascensor": buscar(RE_ASCENSOR),
+        "piso_unidad": buscar(RE_PISO_UNIDAD),
+        "deptos_por_piso": buscar(RE_DEPTOS_POR_PISO),
         "latitud": coordenadas["latitud"],
         "longitud": coordenadas["longitud"],
+        "barrio": barrio,
         **puntos_interes,
     }
 
