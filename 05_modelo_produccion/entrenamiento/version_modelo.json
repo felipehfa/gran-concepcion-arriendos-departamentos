@@ -1,0 +1,16 @@
+{
+  "contador": 2,
+  "version_actual": "v0002_20260711145700_eae758c2",
+  "historial": [
+    {
+      "version": "v0001_20260711131332_eae758c2",
+      "fecha_entrenamiento": "2026-07-11 13:13:32",
+      "hash_hiperparametros": "eae758c2"
+    },
+    {
+      "version": "v0002_20260711145700_eae758c2",
+      "fecha_entrenamiento": "2026-07-11 14:57:00",
+      "hash_hiperparametros": "eae758c2"
+    }
+  ]
+}

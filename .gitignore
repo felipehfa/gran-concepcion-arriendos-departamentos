@@ -13,3 +13,7 @@ venv/
 
 # Datos grandes
 01_obtener_datos/datos_vulnerabilidad/
+
+# tipos de archivos
+*.log
+*.log.*

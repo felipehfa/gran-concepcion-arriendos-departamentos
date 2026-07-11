@@ -4,7 +4,7 @@ Pipeline completo de datos, desde scraping hasta modelamiento, para estimar el p
 arriendo de **departamentos** en las comunas del Gran Concepción (Chile) y detectar avisos
 que están publicados por debajo o por encima de lo que el mercado local justifica.
 
-El proyecto cubre cuatro etapas encadenadas:
+El proyecto cubre cinco etapas encadenadas:
 
 1. **Scraping** de avisos de arriendo (Portal Inmobiliario) + cruce con un índice público de
    vulnerabilidad socioterritorial.
@@ -14,6 +14,9 @@ El proyecto cubre cuatro etapas encadenadas:
 4. **Modelamiento**: comparación de XGBoost, LightGBM y Random Forest para predecir
    `precio_clp`, con **XGBoost como modelo final**, sobre el cual se construye además un
    sistema de etiquetado "oportunidad / caro / precio de mercado".
+5. **Producción** (`05_modelo_produccion/`): pipeline separado, re-ejecutable vía cron, que
+   entrena y versiona un modelo de producción, scrapea avisos nuevos de forma incremental,
+   y genera predicciones + etiquetas sobre una base de datos propia. Ver sección 12.
 
 > El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers sí
 > recolectan casas, pero la etapa de ingeniería de variables filtra y trabaja solo con
@@ -42,6 +45,15 @@ El proyecto cubre cuatro etapas encadenadas:
   01_xgboost.py        → modelo FINAL (bagging ×10) + etiquetado oportunidad/caro
   02_lightgbm.py        → modelo de comparación (bagging ×5)
   03_random_forest.py   → modelo de comparación (bagging ×5)
+        ▼
+05_modelo_produccion/   → pipeline de producción, separado e independiente (ver sección 12)
+  entrenamiento/01_entrenar_modelo_produccion.py → modelo versionado (85/15 + calibración)
+  00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
+  01_scraper_grilla_incremental.py               → tabla `avisos`          (produccion_gran_concepcion.db)
+  02_scraper_detalle_incremental.py              → tabla `avisos_detalle` + estado_publicacion
+  03_vulnerabilidad_produccion.py                → columnas de vulnerabilidad en `avisos_detalle`
+  04_ingenieria_variables_produccion.py          → features de avisos nuevos (contra referencia histórica)
+  05_prediccion.py                               → tabla `predicciones` (precio + etiqueta + confianza)
 ```
 
 Cada script de cada etapa ancla sus rutas de entrada/salida a la ubicación del propio archivo
@@ -159,6 +171,16 @@ fila.
   detección de CAPTCHA por **doble condición** (la palabra "captcha" aparece en el HTML **Y**
   el contenido normal del aviso no cargó) para no confundir el script de reCAPTCHA de fondo
   (presente casi siempre) con un bloqueo real.
+- **Bug corregido: `avisos_detalle.banos` capturaba la superficie, no los baños.** El regex
+  original (`RE_BANOS`, con `re.IGNORECASE`) encontraba primero la insignia superior de la
+  página ("2 baños\n75 m² totales", número **antes** de la palabra, en minúscula) en vez de la
+  sección de características ("Baños\n2", número **después**, con mayúscula), capturando la
+  superficie en vez de los baños reales. Afectaba ~48% de las filas (851 de 1782). Corregido
+  quitando `re.IGNORECASE` (ahora solo matchea la "Baños" con mayúscula de la sección de
+  características), y se corrigieron retroactivamente los valores ya guardados en la base
+  usando `avisos.banos` (grilla, con un regex distinto que nunca tuvo este problema) como
+  fuente confiable. El feature `banos` que usa el modelo siempre vino de `avisos.banos`
+  (grilla), así que ningún modelo entrenado quedó afectado por este bug.
 
 ### 3.3. Limpieza y conversión de datos
 
@@ -419,18 +441,35 @@ gran-concepcion-rentals/
 │           ├── selected_features.csv
 │           └── seleccion_variables_reporte.json
 │
-└── 04_modelamiento/
-    ├── 01_xgboost.py
-    ├── 02_lightgbm.py
-    ├── 03_random_forest.py
-    └── save/model/
-        ├── xgboost_regression_precio.pkl               # ensamble de 10 modelos
-        ├── xgboost_regression_precio_metrics.json
-        ├── xgboost_regression_precio_oportunidades_*.csv
-        ├── lightgbm_regression_precio.pkl
-        ├── lightgbm_regression_precio_metrics.json
-        ├── random_forest_regression_precio.pkl
-        └── random_forest_regression_precio_metrics.json
+├── 04_modelamiento/
+│   ├── 01_xgboost.py
+│   ├── 02_lightgbm.py
+│   ├── 03_random_forest.py
+│   └── save/model/
+│       ├── xgboost_regression_precio.pkl               # ensamble de 10 modelos
+│       ├── xgboost_regression_precio_metrics.json
+│       ├── xgboost_regression_precio_oportunidades_*.csv
+│       ├── lightgbm_regression_precio.pkl
+│       ├── lightgbm_regression_precio_metrics.json
+│       ├── random_forest_regression_precio.pkl
+│       └── random_forest_regression_precio_metrics.json
+│
+└── 05_modelo_produccion/          # pipeline de producción, ver sección 12
+    ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
+    ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
+    ├── 01_scraper_grilla_incremental.py
+    ├── 02_scraper_detalle_incremental.py
+    ├── 03_vulnerabilidad_produccion.py
+    ├── 04_ingenieria_variables_produccion.py
+    ├── 05_prediccion.py
+    ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
+    ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
+    └── entrenamiento/
+        ├── 01_entrenar_modelo_produccion.py
+        ├── version_modelo.json                  # contador + historial de versiones
+        └── versiones/{version}/
+            ├── modelo_produccion.pkl
+            └── parametros_produccion.json
 ```
 
 ---
@@ -488,3 +527,118 @@ playwright install chromium
   derivadas (distancias, comparables cercanos, cruce con Unidad Vecinal).
 - El shapefile de vulnerabilidad socioterritorial (IGVUST) es un dato externo no versionado en
   el repo; regenerar ese cruce desde cero requiere obtenerlo por separado.
+
+---
+
+## 12. Pipeline de producción (`05_modelo_produccion/`)
+
+Sistema separado e independiente de `01_obtener_datos/` a `04_modelamiento/`: usa su **propia
+base de datos** (`produccion_gran_concepcion.db`), nunca escribe en `avisos_gran_concepcion.db`
+(la trata como fuente de solo lectura), y está pensado para correr sin intervención manual vía
+cron, agregando avisos nuevos y sus predicciones día a día.
+
+### 12.1. Parte 1 — Entrenamiento y versionado (`entrenamiento/01_entrenar_modelo_produccion.py`)
+
+- Reutiliza `04_modelamiento/01_xgboost.py` (cargado vía `importlib`, ya que su nombre empieza
+  con dígito) — no duplica la lógica de optimización de hiperparámetros, bagging ni SHAP.
+- **Split 85/15** (train/test) en vez de 70/15/15: el ensamble de bagging igual necesita un set
+  para early stopping, así que se separa internamente un 10% del 85% de train solo para eso
+  (~76.5% train_fit / ~8.5% early-stopping / 15% test) — un detalle interno de entrenamiento,
+  no una tercera partición pública.
+- **Versionado**: cada corrida genera un identificador `v{contador:04d}_{timestamp}_{hash8}`
+  (contador incremental + hash sha256 de los hiperparámetros ganadores), registrado en
+  `version_modelo.json` (contador + historial). El modelo y sus parámetros se **archivan por
+  versión** en `versiones/{version}/` (no se sobrescriben) — así se puede recuperar el modelo
+  exacto usado en cualquier predicción pasada.
+- **Calibración de oportunidad/confianza**: además de las métricas de evaluación estándar,
+  calcula y persiste (sobre el set de test) los bordes de deciles de precio, la mediana/MAD del
+  error por decil, y los terciles del coeficiente de variación del ensamble — todo guardado en
+  `parametros_produccion.json` bajo `calibracion_oportunidad`, para poder etiquetar avisos
+  nuevos en la Parte 2 sin recalcular una distribución con una sola fila (imposible con qcut).
+- Dataset de entrada: por ahora, el mismo CSV curado que usa el modelo de investigación
+  (`datos_ingenieria_variables.csv` + `selected_features.csv`).
+
+### 12.2. Parte 2 — Pipeline incremental
+
+**Esquema de `produccion_gran_concepcion.db`** (definido en `db.py`, normalizado sin llevarlo
+al extremo):
+
+| Tabla | Contenido |
+|---|---|
+| `avisos` | Nivel grilla + `estado_publicacion` (activo/pausado/finalizado) + `fecha_ultimo_chequeo_estado` |
+| `avisos_detalle` | Nivel detalle (1:1 con `avisos`) + columnas de vulnerabilidad IGVUST resueltas directo (sin las tablas separadas `vulnerabilidad_uv`/`avisos_igvust` de la base original) |
+| `predicciones` | Una fila por `(id_aviso, version_modelo)` — precio predicho, z_robusto, decil, etiqueta, confianza |
+| `corridas` | Metadatos de cada corrida del orquestador (contadores, motivo de corte, resultado) |
+| `logs_ejecucion` | Log persistente por etapa, espejo de `logs/orquestador.log` pero consultable con SQL |
+| `control` | Clave/valor genérico (ej. cooldown tras CAPTCHA del scraper de detalle) |
+
+**Etapas** (cada una reutiliza el script equivalente de `01_obtener_datos/`/`03_ingenieria_variables/`
+vía `importlib`, sin duplicar lógica de parsing/extracción):
+
+1. **`01_scraper_grilla_incremental.py`** — recorre la grilla de búsqueda guardando solo avisos
+   cuyo `id_aviso` no exista en la base original NI en producción. Corta por
+   `MAX_PAGINAS_VACIAS_CONSECUTIVAS = 10` páginas seguidas sin avisos nuevos (por combinación
+   comuna×tipo), o por techo de presupuesto (`MAX_PAGINAS_POR_CORRIDA = 200`,
+   `MAX_MINUTOS_POR_CORRIDA = 30`) si se alcanza antes — el motivo de corte queda registrado.
+2. **`02_scraper_detalle_incremental.py`** — visita avisos nuevos sin detalle, y además
+   **re-chequea** avisos `activo` con más de `DIAS_MIN_ENTRE_RECHEQUEOS = 7` días desde su
+   último chequeo (batch de `MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50`, los más antiguos primero).
+   Extrae `estado_publicacion` del mismo JSON embebido que ya se usa para los puntos de interés
+   (busca el componente `item_status_message`/`item_status_short_description_message` dentro de
+   `components.head`/`components.short_description`; si no aparece, el aviso está activo). El
+   guardado usa **UPSERT** (no `INSERT OR REPLACE`) para que un re-chequeo nunca borre las
+   columnas de vulnerabilidad que llena la etapa siguiente.
+3. **`03_vulnerabilidad_produccion.py`** — cruce punto-en-polígono contra el mismo shapefile
+   IGVUST, resuelto directo a columnas de `avisos_detalle` (no a tablas de referencia
+   separadas). Solo procesa avisos con coordenadas y `uv_rsh` todavía `NULL` (incremental).
+4. **`04_ingenieria_variables_produccion.py`** — calcula las 20 features del modelo para avisos
+   nuevos, pero **sin recalcular nada en modo batch** (a diferencia del pipeline de
+   investigación): compara cada aviso contra una **población de referencia fija**
+   (`datos_ingenieria_variables.csv` + coordenadas/comuna recuperadas con un `SELECT` de solo
+   lectura contra la base original) vía `BallTree` para `precio_m2_sector_departamento` y la
+   imputación de `antiguedad_anos`, y reutiliza los modelos de imputación de superficie ya
+   entrenados (`aplicar_modelo_guardado`) sin reentrenar nada.
+5. **`05_prediccion.py`** — predice con el ensamble vigente, convierte el precio real del aviso
+   a CLP (reutiliza `convertir_precios_uf_a_clp` si `moneda='UF'`), aplica la calibración
+   guardada en la Parte 1 para calcular `z_robusto`/etiqueta/confianza, e inserta en
+   `predicciones` vía UPSERT sobre `(id_aviso, version_modelo)`.
+
+### 12.3. Orquestador (`00_orquestador.py`)
+
+Corre las 5 etapas en orden. Por cada corrida:
+- Crea una fila en `corridas` (resultado inicial `'parcial'`, se actualiza al final).
+- Loggea a un archivo rotativo (`logs/orquestador.log`, `RotatingFileHandler`, 5 MB × 5
+  backups) **y** a la tabla `logs_ejecucion`, etiquetando cada mensaje con la etapa vigente
+  (una variable global simple que lee un `logging.Handler` propio — funciona sin importar desde
+  qué submódulo anidado venga el log).
+- Si una etapa lanza una excepción, se detiene ahí mismo (las etapas siguientes NO corren),
+  registra `ERROR` con traceback completo en archivo y BD, y marca `corridas.resultado='error'`
+  con `etapa_fallida`/`mensaje_error`.
+- Si el scraper de detalle se detiene por CAPTCHA (no es una excepción, es un corte limpio ya
+  manejado por esa etapa), se sigue igual con las etapas siguientes sobre lo ya procesado, y la
+  corrida queda como `'parcial'` en vez de `'ok'`.
+- **Alerta de fallo silencioso**: al final de cada corrida exitosa/parcial, revisa si las
+  últimas `N_CORRIDAS_CONSECUTIVAS_SIN_NUEVOS = 5` corridas tuvieron 0 avisos nuevos en la
+  grilla, y deja un `WARNING` explícito — podría ser un cambio en la estructura del sitio o un
+  bloqueo no detectado, no necesariamente falta de contenido nuevo.
+
+Pensado para cron, ej.:
+```bash
+0 */4 * * * cd /ruta/al/proyecto/05_modelo_produccion && /ruta/al/python 00_orquestador.py
+```
+
+### 12.4. Notas y limitaciones conocidas de esta sección
+
+- `gastos_comunes` en producción replica a propósito el mismo quirk del pipeline de
+  investigación (pierde el separador de miles chileno: "$120.000" → `120.0`, no `120000.0`),
+  para que el dato sea comparable con el histórico que ya vio el modelo. Corregirlo requiere
+  hacerlo en ambos lados a la vez y reentrenar.
+- La población de referencia de la etapa de variables (comparables de precio/m² e imputación de
+  antigüedad) usa **solo** el dataset histórico de investigación, no los avisos de producción ya
+  procesados — más simple y estable, a costa de no reflejar aún datos más recientes del mercado.
+- Los bordes `-inf`/`inf` en `calibracion_oportunidad` (para clasificar avisos fuera del rango
+  de precio/CV visto en test) se serializan como `-Infinity`/`Infinity`, válido para Python pero
+  no JSON estándar — una herramienta no-Python que lea ese archivo directo fallaría en esos dos
+  campos.
+- El pipeline de producción solo predice `tipo_propiedad='departamento'` (igual que el modelo);
+  las casas se scrapean pero nunca se puntúan.

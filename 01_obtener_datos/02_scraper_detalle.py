@@ -118,7 +118,16 @@ RE_FECHA_PUBLICACION = re.compile(r"Publicado hace ([^\n\|]+)", re.IGNORECASE)
 RE_SUPERFICIE_TOTAL = re.compile(r"Superficie total\s*([\d.,]+)\s*m", re.IGNORECASE)
 RE_SUPERFICIE_UTIL = re.compile(r"Superficie útil\s*([\d.,]+)\s*m", re.IGNORECASE)
 RE_DORMITORIOS = re.compile(r"Dormitorios\s*(\d+)", re.IGNORECASE)
-RE_BANOS = re.compile(r"Baños\s*(\d+)", re.IGNORECASE)
+
+# Sin IGNORECASE a propósito: la insignia superior de la página trae "N
+# baños" en minúscula ANTES del número (ej. "2 baños\n75 m² totales"),
+# mientras que la sección de características trae "Baños" con mayúscula
+# DESPUÉS del número (ej. "Baños\n2"). Con IGNORECASE, re.search encontraba
+# primero la insignia y capturaba el número que viene después de "baños"
+# ahí — que es la superficie total, no la cantidad real de baños (bug
+# confirmado en ~48% de las filas de avisos_detalle). Matchear solo "Baños"
+# con B mayúscula evita la insignia por completo.
+RE_BANOS = re.compile(r"Baños\s*(\d+)")
 RE_ESTACIONAMIENTOS = re.compile(r"Estacionamientos:?\s*(\d+)", re.IGNORECASE)
 RE_ANTIGUEDAD = re.compile(r"Antigüedad\s*(\d+)\s*años?", re.IGNORECASE)
 RE_AMOBLADO = re.compile(r"Amoblado:?\s*(Sí|No)", re.IGNORECASE)
