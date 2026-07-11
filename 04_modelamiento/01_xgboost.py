@@ -65,7 +65,7 @@ VAL_SIZE  = 0.15   # sobre el total; se ajusta internamente sobre el resto tras 
 # Número de modelos del ensamble de bagging en el entrenamiento final.
 # Cada modelo usa los mismos hiperparámetros (best_params) pero una
 # semilla distinta. Las predicciones finales son el promedio del ensamble.
-N_SEEDS_BAGGING = 5
+N_SEEDS_BAGGING = 10
 
 N_TRIALS_OPTUNA = 50
 CV_SPLITS_OPTUNA = 5
@@ -102,6 +102,29 @@ SEEDS_STABILITY = [STABILITY_SEED_BASE + i for i in range(N_SEEDS_STABILITY)]
 # dimos menos presupuesto de búsqueda".
 N_TRIALS_OPTUNA_STABILITY = N_TRIALS_OPTUNA
 CV_SPLITS_OPTUNA_STABILITY = CV_SPLITS_OPTUNA
+
+# Etiquetado oportunidad/caro/precio_de_mercado (test): deciles de precio_clp
+# usados para normalizar el error del modelo por segmento de precio.
+# Distintos de N_ESTRATOS_PRECIO (quintiles), que se usan solo para el split
+# y el reporting de evaluación existente y no cambian.
+N_DECILES_OPORTUNIDAD = 10
+
+# Constante de escalamiento del MAD (median absolute deviation) para que sea
+# comparable a una desviación estándar bajo normalidad (1/Φ⁻¹(0.75) ≈ 1.4826).
+MAD_SCALE_CONST = 1.4826
+
+# Umbrales (en desviaciones robustas, z_robusto) para las etiquetas de
+# precio. error = precio_real - precio_predicho: precio_real por DEBAJO de
+# lo esperado por el modelo (ajustado por decil) → "oportunidad" (z muy
+# negativo); por ENCIMA → "caro" (z muy positivo).
+UMBRAL_OPORTUNIDAD = 1.0
+UMBRAL_CARO = 1.0
+
+# Niveles de confianza según percentiles del coeficiente de variación
+# (std/mean) de las predicciones del ensamble por fila: menor CV (los
+# modelos del ensamble concuerdan más) → mayor confianza.
+N_GRUPOS_CONFIANZA = 3
+ETIQUETAS_CONFIANZA = ["alta confianza", "confianza media", "baja confianza"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -365,11 +388,16 @@ def train_model(
     return models
 
 
+def predict_ensemble_matrix(models: list, X: pd.DataFrame) -> np.ndarray:
+    """Predicciones individuales de cada modelo del ensamble, sin promediar.
+    Returns: array (n_modelos, n_filas)."""
+    dmatrix = xgb.DMatrix(X.fillna(0))
+    return np.stack([np.clip(m.predict(dmatrix), 0, None) for m in models])
+
+
 def predict_ensemble(models: list, X: pd.DataFrame) -> np.ndarray:
     """Predicción del ensamble: promedio de las predicciones individuales."""
-    dmatrix = xgb.DMatrix(X.fillna(0))
-    preds = np.stack([np.clip(m.predict(dmatrix), 0, None) for m in models])
-    return preds.mean(axis=0)
+    return predict_ensemble_matrix(models, X).mean(axis=0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -412,6 +440,7 @@ def entrenar_y_evaluar_modelo(
     print(f"\n{'='*60}")
     print(f"ENTRENAMIENTO FINAL  [Bagging x{n_seeds_bagging}]")
     print("="*60)
+    t_bagging0 = time.time()
     if persistir_modelo:
         models = train_model(X_train, y_train, X_val, y_val, best_params,
                               n_seeds_bagging=n_seeds_bagging)
@@ -420,6 +449,9 @@ def entrenar_y_evaluar_modelo(
             X_train, y_train, X_val, y_val, best_params,
             n_seeds_bagging=n_seeds_bagging, seed_base=seed, verbose=True,
         )
+    tiempo_bagging = time.time() - t_bagging0
+    print(f"\n  Tiempo ENTRENAMIENTO FINAL (bagging x{n_seeds_bagging}): "
+          f"{tiempo_bagging:.1f}s ({tiempo_bagging/n_seeds_bagging:.1f}s/modelo)")
 
     y_val_pred  = predict_ensemble(models, X_val)
     y_test_pred = predict_ensemble(models, X_test)
@@ -437,6 +469,7 @@ def entrenar_y_evaluar_modelo(
         "y_test_pred":  y_test_pred,
         "eval_val":     eval_val,
         "eval_test":    eval_test,
+        "tiempo_bagging_seg": round(tiempo_bagging, 2),
     }
 
 
@@ -743,6 +776,170 @@ def compute_shap_native(models: list, X: pd.DataFrame) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Etiquetado oportunidad/caro/precio_de_mercado (test)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def mediana_y_mad(x: np.ndarray) -> tuple:
+    """Mediana y MAD (median absolute deviation, sin escalar) de un array."""
+    mediana = float(np.median(x))
+    mad = float(np.median(np.abs(x - mediana)))
+    return mediana, mad
+
+
+def calcular_z_robusto_por_decil(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    n_deciles: int = N_DECILES_OPORTUNIDAD,
+    mad_scale: float = MAD_SCALE_CONST,
+) -> dict:
+    """
+    Divide `y_true` (precio_clp) en `n_deciles` grupos y calcula, para cada
+    fila, el error (precio_real - precio_predicho) normalizado de forma
+    robusta contra la mediana y el MAD del error dentro de su propio decil
+    de precio:
+
+        z_robusto = (error - mediana_decil) / (MAD_decil * mad_scale)
+
+    Se usa mediana/MAD en vez de media/std porque son menos sensibles a
+    outliers — relevante dado que cada decil tiene pocas filas en el set
+    de test (~4-5 filas por grupo con ~40-45 filas de test).
+    """
+    error = y_true - y_pred
+    deciles = construir_estratos_precio(pd.Series(y_true), n_estratos=n_deciles).values
+
+    mediana_por_decil = np.zeros_like(error)
+    mad_por_decil = np.zeros_like(error)
+    stats_por_decil = {}
+    for d in sorted(np.unique(deciles)):
+        mask = deciles == d
+        mediana_d, mad_d = mediana_y_mad(error[mask])
+        mediana_por_decil[mask] = mediana_d
+        mad_por_decil[mask] = mad_d
+        stats_por_decil[int(d)] = {
+            "n": int(mask.sum()),
+            "mediana_error": round(mediana_d, 4),
+            "mad_error": round(mad_d, 4),
+        }
+
+    mad_ajustado = mad_por_decil * mad_scale
+    # Evitar división por cero en deciles donde todos los errores son
+    # idénticos (MAD=0) — puede pasar con pocas filas por grupo.
+    mad_ajustado_seguro = np.where(mad_ajustado == 0, 1e-6, mad_ajustado)
+    z_robusto = (error - mediana_por_decil) / mad_ajustado_seguro
+
+    return {
+        "deciles": deciles, "error": error,
+        "mediana_por_decil": mediana_por_decil, "mad_por_decil": mad_por_decil,
+        "z_robusto": z_robusto, "stats_por_decil": stats_por_decil,
+    }
+
+
+def clasificar_confianza_cv(
+    cv: np.ndarray,
+    n_grupos: int = N_GRUPOS_CONFIANZA,
+    etiquetas: list = ETIQUETAS_CONFIANZA,
+) -> np.ndarray:
+    """
+    Clasifica el coeficiente de variación (std/mean) de las predicciones del
+    ensamble por fila en grupos de confianza, según percentiles de CV sobre
+    el propio set de test: menor CV (los modelos del ensamble concuerdan
+    más entre sí para esa fila) → mayor confianza.
+    """
+    bin_idx = pd.qcut(cv, q=n_grupos, labels=False, duplicates="drop")
+    n_bins_reales = int(np.max(bin_idx)) + 1
+    if n_bins_reales < n_grupos:
+        # Pocos valores únicos de CV para separar en n_grupos distintos:
+        # usar solo los extremos disponibles (más confianza / menos
+        # confianza) en vez de inventar categorías intermedias vacías.
+        etiquetas_usadas = ([etiquetas[0]] if n_bins_reales == 1
+                             else [etiquetas[0], etiquetas[-1]])
+    else:
+        etiquetas_usadas = etiquetas
+    return np.array([etiquetas_usadas[i] for i in bin_idx])
+
+
+def etiquetar_oportunidades(
+    test: pd.DataFrame,
+    models: list,
+    X_test: pd.DataFrame,
+    umbral_oportunidad: float = UMBRAL_OPORTUNIDAD,
+    umbral_caro: float = UMBRAL_CARO,
+) -> tuple:
+    """
+    Para cada propiedad del set de test, compara su precio real contra el
+    promedio predicho por el ensamble de bagging, normalizado dentro de su
+    propio decil de precio (ver `calcular_z_robusto_por_decil`), y la
+    etiqueta como:
+      - "oportunidad": precio real por DEBAJO de lo esperado (z_robusto muy
+        negativo) — más barata que propiedades comparables.
+      - "caro": precio real por ENCIMA de lo esperado (z_robusto muy
+        positivo).
+      - "precio_de_mercado": dentro del rango normal para su decil.
+
+    Además calcula un nivel de confianza por fila a partir del coeficiente
+    de variación (std/mean) de las N_SEEDS_BAGGING predicciones individuales
+    del ensamble: si los modelos discrepan mucho entre sí para una fila,
+    la etiqueta es menos confiable aunque el z_robusto sea grande.
+    """
+    y_true = test[TARGET_COL].astype(float).values
+    pred_matrix = predict_ensemble_matrix(models, X_test)
+    y_pred = pred_matrix.mean(axis=0)
+
+    z_info = calcular_z_robusto_por_decil(y_true, y_pred)
+    z_robusto = z_info["z_robusto"]
+
+    etiqueta = np.where(
+        z_robusto < -umbral_oportunidad, "oportunidad",
+        np.where(z_robusto > umbral_caro, "caro", "precio_de_mercado"),
+    )
+
+    pred_std = pred_matrix.std(axis=0)
+    cv_ensamble = pred_std / np.where(y_pred == 0, 1e-6, y_pred)
+    nivel_confianza = clasificar_confianza_cv(cv_ensamble)
+
+    etiqueta_final = np.array([f"{e} ({c})" for e, c in zip(etiqueta, nivel_confianza)])
+
+    resultado = pd.DataFrame({
+        "precio_real":         y_true,
+        "precio_predicho":     y_pred,
+        "error":               z_info["error"],
+        "decil_precio":        z_info["deciles"],
+        "mediana_error_decil": z_info["mediana_por_decil"],
+        "mad_error_decil":     z_info["mad_por_decil"],
+        "z_robusto":           z_robusto,
+        "cv_ensamble":         cv_ensamble,
+        "nivel_confianza":     nivel_confianza,
+        "etiqueta":            etiqueta,
+        "etiqueta_final":      etiqueta_final,
+    })
+    if ID_COL in test.columns:
+        resultado.insert(0, ID_COL, test[ID_COL].values)
+
+    print(f"\n{'='*60}")
+    print(f"ETIQUETADO OPORTUNIDAD/CARO — Test ({len(resultado)} filas, "
+          f"{N_DECILES_OPORTUNIDAD} deciles de precio, "
+          f"umbral_oportunidad={umbral_oportunidad}, umbral_caro={umbral_caro})")
+    print("="*60)
+
+    resumen_etiqueta_confianza = pd.crosstab(resultado["etiqueta"], resultado["nivel_confianza"])
+    resumen_decil = resultado["decil_precio"].value_counts().sort_index()
+    resumen_pct = (resultado["etiqueta"].value_counts(normalize=True) * 100).round(1)
+
+    print("\n  Conteo por etiqueta × nivel de confianza:")
+    print(resumen_etiqueta_confianza.to_string())
+    print("\n  Conteo por decil de precio:")
+    print(resumen_decil.to_string())
+    print("\n  Distribución de etiquetas (%):")
+    print(resumen_pct.to_string())
+
+    return resultado, {
+        "stats_por_decil":              z_info["stats_por_decil"],
+        "resumen_etiqueta_confianza":   resumen_etiqueta_confianza,
+        "resumen_decil":                resumen_decil,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Pipeline principal
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -789,6 +986,19 @@ def run_all(df: pd.DataFrame, features: list) -> dict:
     print(pd.Series(shap_importance).head(15).to_string())
     resultado["shap_importance"] = shap_importance
 
+    oportunidades_df, oportunidades_resumen = etiquetar_oportunidades(
+        test, resultado["models"], resultado["X_test"],
+    )
+    oportunidades_path = SAVE_MODEL_DIR / f"{MODEL_NAME}_oportunidades_test.csv"
+    oportunidades_df.to_csv(oportunidades_path, index=False)
+    resumen_etiqueta_confianza_path = SAVE_MODEL_DIR / f"{MODEL_NAME}_oportunidades_resumen_etiqueta_confianza.csv"
+    oportunidades_resumen["resumen_etiqueta_confianza"].to_csv(resumen_etiqueta_confianza_path)
+    resumen_decil_path = SAVE_MODEL_DIR / f"{MODEL_NAME}_oportunidades_resumen_decil.csv"
+    oportunidades_resumen["resumen_decil"].to_csv(resumen_decil_path)
+    print(f"\n  Etiquetas exportadas:            {oportunidades_path}")
+    print(f"  Resumen etiqueta×confianza:      {resumen_etiqueta_confianza_path}")
+    print(f"  Resumen por decil:               {resumen_decil_path}")
+
     best_params  = resultado["best_params"]
     optim_info   = resultado["optim_info"]
     models       = resultado["models"]
@@ -808,6 +1018,7 @@ def run_all(df: pd.DataFrame, features: list) -> dict:
         "hiperparametros":     best_params,
         "optimizacion":        optim_info,
         "n_seeds_bagging":     N_SEEDS_BAGGING,
+        "tiempo_bagging_seg":  resultado["tiempo_bagging_seg"],
         "split": {
             "test_size": TEST_SIZE, "val_size": VAL_SIZE, "seed": SEED,
             "n_train": len(train), "n_val": len(val), "n_test": len(test),
@@ -815,6 +1026,13 @@ def run_all(df: pd.DataFrame, features: list) -> dict:
         "evaluacion_val":       eval_val,
         "evaluacion_test":      eval_test,
         "shap_importance":      {k: float(v) for k, v in shap_importance.items()},
+        "oportunidades_test": {
+            "n_deciles":          N_DECILES_OPORTUNIDAD,
+            "umbral_oportunidad": UMBRAL_OPORTUNIDAD,
+            "umbral_caro":        UMBRAL_CARO,
+            "stats_por_decil":    oportunidades_resumen["stats_por_decil"],
+            "distribucion_etiquetas": oportunidades_df["etiqueta"].value_counts().to_dict(),
+        },
     }
 
     metrics_path = SAVE_MODEL_DIR / f"{MODEL_NAME}_metrics.json"
@@ -828,7 +1046,8 @@ def run_all(df: pd.DataFrame, features: list) -> dict:
     print("="*60)
     print(f"  Objective:        {best_params.get('objective','?')}")
     print(f"  Mejor {optim_info['cv_metric'].upper()} CV: {optim_info['best_cv_score']:,.4f}  (solo train)")
-    print(f"  Bagging:          {N_SEEDS_BAGGING} modelo(s)")
+    print(f"  Bagging:          {N_SEEDS_BAGGING} modelo(s)  "
+          f"(tiempo: {resultado['tiempo_bagging_seg']:.1f}s)")
     print(f"  VAL  → MAE={eval_val['metricas_globales']['mae']:,.0f}  "
           f"RMSE={eval_val['metricas_globales']['rmse']:,.0f}  R²={eval_val['metricas_globales']['r2']:.4f}  "
           f"MAPE={eval_val['metricas_globales']['mape']:.2f}%")
@@ -851,6 +1070,7 @@ def run_all(df: pd.DataFrame, features: list) -> dict:
         "eval_val":        eval_val,
         "eval_test":       eval_test,
         "shap_importance": shap_importance,
+        "oportunidades_test": oportunidades_df,
     }
 
 
