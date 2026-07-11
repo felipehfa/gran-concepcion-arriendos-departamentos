@@ -12,4 +12,4 @@ venv/
 .claude/
 
 # Datos grandes
-"01_obtener_datos/datos_vulnerabilidad/"
+01_obtener_datos/datos_vulnerabilidad/

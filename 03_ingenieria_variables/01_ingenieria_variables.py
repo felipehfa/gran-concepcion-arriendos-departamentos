@@ -37,10 +37,11 @@ from sklearn.neighbors import BallTree
 # directorio de trabajo actual), para que el script funcione igual sin
 # importar desde dónde se invoque o desde dónde lo importe un orquestador.
 DIRECTORIO_SCRIPT = Path(__file__).resolve().parent
+DIRECTORIO_SALIDA = DIRECTORIO_SCRIPT / "save" / "ingeniaria_variables"
 
 RUTA_BD_DEFAULT = str(DIRECTORIO_SCRIPT / "../01_obtener_datos/avisos_gran_concepcion.db")
-RUTA_SALIDA_CSV_DEFAULT = str(DIRECTORIO_SCRIPT / "datos_ingenieria_variables.csv")
-RUTA_SALIDA_NIVELES_BARRIO_DEFAULT = str(DIRECTORIO_SCRIPT / "niveles_barrio.json")
+RUTA_SALIDA_CSV_DEFAULT = str(DIRECTORIO_SALIDA / "datos_ingenieria_variables.csv")
+RUTA_SALIDA_NIVELES_BARRIO_DEFAULT = str(DIRECTORIO_SALIDA / "niveles_barrio.json")
 
 API_UF_URL = "https://mindicador.cl/api/uf/{fecha}"
 
@@ -55,11 +56,14 @@ NOMBRES_NIVELES = ["muy_barato", "barato", "medio", "alto", "muy_alto"]
 UMBRAL_MINIMO_M2 = 30
 COLUMNAS_PREDICTORAS_SUPERFICIE = ["dormitorios", "banos", "comuna"]
 MINIMO_FILAS_PARA_ENTRENAR = 20
-RUTA_MODELOS = DIRECTORIO_SCRIPT / "modelos_superficie"
+RUTA_MODELOS = DIRECTORIO_SALIDA / "modelos_superficie"
+
+# El pipeline solo trabaja con departamentos: la base de datos ya no incluye
+# avisos de casa, por lo que no se generan variables derivadas de ese tipo.
+TIPO_PROPIEDAD_OBJETIVO = "departamento"
 
 RADIO_METROS_COMPARADOR_SECTOR = 300
 TIPOS_PROPIEDAD_COLUMNAS = {
-    "casa": "precio_m2_sector_casa",
     "departamento": "precio_m2_sector_departamento",
 }
 MULTIPLICADOR_IQR = 3
@@ -82,13 +86,16 @@ PATRON_AMOBLADO = re.compile(r"amoblad[oa]|amueblad[oa]", re.IGNORECASE)
 # ------------------------------------------------------------------
 # Carga y diagnóstico inicial
 # ------------------------------------------------------------------
-def cargar_datos(ruta_bd: str = RUTA_BD_DEFAULT):
+def cargar_datos(ruta_bd: str = RUTA_BD_DEFAULT, tipo_propiedad: str = TIPO_PROPIEDAD_OBJETIVO):
     """Lee de la base de datos SQLite las 4 tablas necesarias para construir
     el dataset (avisos, su detalle, la llave de vulnerabilidad socioterritorial
     y la tabla de vulnerabilidad por unidad vecinal) y las devuelve como
-    DataFrames independientes."""
+    DataFrames independientes. 'avisos' se filtra por `tipo_propiedad` en la
+    propia consulta, ya que el pipeline solo trabaja con departamentos."""
     con = sqlite3.connect(ruta_bd)
-    df_avisos = pd.read_sql_query("SELECT * FROM avisos", con)
+    df_avisos = pd.read_sql_query(
+        "SELECT * FROM avisos WHERE tipo_propiedad = ?", con, params=(tipo_propiedad,)
+    )
     df_detalle = pd.read_sql_query("SELECT * FROM avisos_detalle", con)
     df_llave_vulnerabilidad = pd.read_sql_query("SELECT * FROM avisos_igvust", con)
     df_vulnerabilidad = pd.read_sql_query("SELECT * FROM vulnerabilidad_uv", con)
@@ -513,6 +520,7 @@ def agregar_nivel_barrio(df: pd.DataFrame, ruta_salida_json: str = RUTA_SALIDA_N
 
     df = df.drop(columns=["_precio_m2"])
 
+    Path(ruta_salida_json).resolve().parent.mkdir(parents=True, exist_ok=True)
     with open(ruta_salida_json, "w", encoding="utf-8") as f:
         json.dump({
             "mapa_barrio_a_nivel": mapa_barrio_a_nivel,
@@ -536,9 +544,11 @@ def estimar_superficie(df: pd.DataFrame, columna_objetivo: str,
                         columna_agrupacion: str = "tipo_propiedad") -> pd.Series:
     """
     Entrena UN MODELO SEPARADO por cada valor de `columna_agrupacion` (por
-    defecto, uno para 'casa' y otro para 'departamento'), usando SOLO las
-    filas con `columna_objetivo` >= umbral_minimo como datos confiables, y
-    estima el valor para las filas con valor < umbral_minimo o NaN.
+    defecto 'tipo_propiedad'; como el pipeline solo procesa departamentos,
+    en la práctica esto entrena un único modelo, para 'departamento'), usando
+    SOLO las filas con `columna_objetivo` >= umbral_minimo como datos
+    confiables, y estima el valor para las filas con valor < umbral_minimo o
+    NaN.
 
     El modelo FINAL de cada grupo se entrena con el 100% de los datos
     confiables de ese grupo (no solo el 80% usado para la validación), y se
@@ -547,7 +557,7 @@ def estimar_superficie(df: pd.DataFrame, columna_objetivo: str,
 
     Devuelve la columna ya corregida (float).
     """
-    RUTA_MODELOS.mkdir(exist_ok=True)
+    RUTA_MODELOS.mkdir(parents=True, exist_ok=True)
     resultado = df[columna_objetivo].astype(float).copy()
 
     es_confiable = resultado.notna() & (resultado >= umbral_minimo)
@@ -661,8 +671,8 @@ def agregar_precio_m2_sector(df: pd.DataFrame, radio_metros: float = RADIO_METRO
     """
     Para cada aviso, calcula el precio/m2 mediano de las viviendas del mismo
     tipo de propiedad dentro de `radio_metros` (excluyéndose a sí mismo), y lo
-    guarda en 'precio_m2_sector_casa' / 'precio_m2_sector_departamento' según
-    corresponda. precio_m2 se usa aquí SOLO como variable auxiliar interna
+    guarda en 'precio_m2_sector_departamento' (único tipo que maneja el
+    pipeline). precio_m2 se usa aquí SOLO como variable auxiliar interna
     para promediar el sector - no se guarda en df ni se usa como feature
     directa del modelo (usarla tal cual sería fuga de datos, porque viene del
     precio de la propia fila). Si un aviso no tiene vecinos cercanos válidos,
@@ -719,12 +729,6 @@ def agregar_precio_m2_sector(df: pd.DataFrame, radio_metros: float = RADIO_METRO
         # Filas sin coords / sin precio_m2 válido / outlier: también caen al fallback general
         idx_resto = indices_grupo.difference(idx_validos)
         df.loc[idx_resto, columna_destino] = mediana_general_grupo
-
-        # Las filas del OTRO tipo de propiedad nunca pasaron por este bloque, así
-        # que su valor en esta columna sigue en NaN - se rellenan con el mismo
-        # fallback general (ej. 'precio_m2_sector_casa' para una fila que es
-        # departamento queda en la mediana general de las casas del dataset).
-        df[columna_destino] = df[columna_destino].fillna(mediana_general_grupo)
 
     return df
 
@@ -844,10 +848,11 @@ def eliminar_columnas_geograficas(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------
 # Codificación de variables categóricas y variables derivadas finales
 # ------------------------------------------------------------------
-def codificar_tipo_propiedad(df: pd.DataFrame) -> pd.DataFrame:
-    """One-hot encoding de 'tipo_propiedad' (elimina la categoría original y
-    la primera dummy, para evitar colinealidad perfecta)."""
-    return pd.get_dummies(df, columns=["tipo_propiedad"], prefix="tipo_propiedad", drop_first=True)
+def eliminar_columna_tipo_propiedad(df: pd.DataFrame) -> pd.DataFrame:
+    """Descarta 'tipo_propiedad': el pipeline solo procesa departamentos (las
+    casas se filtran en el origen, ver `cargar_datos`), por lo que la columna
+    queda constante y no aporta información como feature."""
+    return df.drop(columns=["tipo_propiedad"])
 
 
 def convertir_columnas_a_numerico_final(df: pd.DataFrame) -> pd.DataFrame:
@@ -903,9 +908,11 @@ def crear_ratio_superficie(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
 def guardar_resultado(df: pd.DataFrame, ruta_salida: str = RUTA_SALIDA_CSV_DEFAULT) -> pd.DataFrame:
     """Guarda el dataset final en CSV, listo para la etapa de modelamiento."""
-    df.to_csv(ruta_salida)
+    Path(ruta_salida).resolve().parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(ruta_salida, index=False)
     return df
 
 
@@ -928,6 +935,96 @@ def imprimir_resumen_final(df: pd.DataFrame) -> None:
             print(f"  {columna}: {cantidad} nulos ({cantidad / df.shape[0] * 100:.2f}%)")
     print("=" * 70)
 
+# ------------------------------------------------------------------
+# Variables derivadas adicionales (ratios, densidades e interacciones)
+# ------------------------------------------------------------------
+def crear_variables_derivadas(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Crea features derivadas a partir de columnas ya existentes en el
+    pipeline, pensadas para darle al modelo señales que hoy están implícitas
+    pero no explícitas (ratios de tamaño, densidad de amenities/POIs,
+    interacciones ubicación-superficie). Ninguna usa 'precio_clp' de la
+    propia fila, por lo que no hay riesgo de fuga de datos.
+
+    Debe llamarse después de que 'nivel_barrio', 'precio_m2_sector_departamento'
+    y las columnas de amenities/POIs ya existan en el DataFrame.
+    """
+    df = df.copy()
+
+    dormitorios_safe = df["dormitorios"].replace(0, np.nan)
+    superficie_util_safe = df["superficie_util_m2"].replace(0, np.nan)
+    superficie_total_safe = df["superficie_total_m2"].replace(0, np.nan)
+    distancia_comuna_safe = df["distancia_centro_comuna_m"].replace(0, np.nan)
+
+    # --- Tamaño relativo por habitación ---
+    # Cuánto espacio "le toca" a cada dormitorio: dos deptos de igual
+    # superficie total pueden sentirse muy distintos según cuántos dormitorios
+    # reparten ese espacio.
+    df["superficie_util_por_dormitorio"] = (
+        df["superficie_util_m2"] / dormitorios_safe
+    ).fillna(df["superficie_util_m2"])
+
+    df["banos_por_dormitorio"] = (df["banos"] / dormitorios_safe).fillna(df["banos"])
+
+    df["estacionamientos_por_dormitorio"] = (
+        df["estacionamientos"] / dormitorios_safe
+    ).fillna(0)
+
+    # --- Costo de mantención relativo al tamaño ---
+    # gastos_comunes ya está en el modelo en términos absolutos; en términos
+    # de CLP/m2 es más comparable entre deptos grandes y chicos.
+    df["gastos_comunes_por_m2"] = (df["gastos_comunes"] / superficie_util_safe).fillna(0)
+
+    # --- Índice de amenities ---
+    # Conteo simple de comodidades presentes, en vez de que el árbol tenga
+    # que combinar 5 columnas binarias por separado en cada split.
+    columnas_amenities = ["piscina", "quincho", "conserjeria", "ascensor", "estacionamiento_visitas"]
+    df["indice_amenities"] = df[columnas_amenities].sum(axis=1)
+
+    # --- Interacción piso alto sin ascensor ---
+    # Un piso 8 con ascensor no es lo mismo que un piso 8 sin ascensor;
+    # esta interacción lo deja explícito para el árbol.
+    df["piso_sin_ascensor"] = df["piso_unidad"] * (1 - df["ascensor"])
+
+    # --- Densidad total de puntos de interés cercanos ---
+    # Accesibilidad general del sector en un solo número, en vez de 11
+    # columnas de conteo por separado.
+    columnas_pois = [
+        "cantidad_paraderos", "cantidad_jardines_infantiles", "cantidad_colegios",
+        "cantidad_universidades", "cantidad_plazas", "cantidad_supermercados",
+        "cantidad_farmacias", "cantidad_centros_comerciales", "cantidad_hospitales",
+        "cantidad_clinicas", "cantidad_estaciones_metro",
+    ]
+    df["densidad_pois_cercanos"] = df[columnas_pois].sum(axis=1)
+
+    # --- Ubicación relativa dentro de la comuna ---
+    # Qué tan cerca está del centro de Concepción en relación a qué tan cerca
+    # está del centro de su propia comuna (proxy de si es "periferia
+    # bien conectada" vs. "periferia aislada").
+    df["ratio_distancia_concepcion_comuna"] = (
+        df["distancia_centro_concepcion_m"] / distancia_comuna_safe
+    ).fillna(df["distancia_centro_concepcion_m"])
+
+    # --- Valor de mercado implícito del sector, aplicado a la superficie propia ---
+    # precio_m2_sector_departamento viene del entorno (vecinos), no de la
+    # propia fila, así que no hay fuga. Multiplicarlo por la superficie propia
+    # da una estimación de "cuánto valdría según el mercado local", que puede
+    # ayudar especialmente en el segmento de precios altos donde el modelo
+    # tiene menos ejemplos.
+    df["valor_mercado_estimado_sector"] = df["precio_m2_sector_departamento"] * df["superficie_util_m2"]
+
+    # --- Interacción nivel de barrio x superficie ---
+    # Un m2 adicional no vale lo mismo en un barrio "muy_alto" que en uno
+    # "muy_barato"; esta interacción lo deja explícito.
+    df["nivel_barrio_x_superficie"] = df["nivel_barrio"] * df["superficie_util_m2"]
+
+    # --- Eficiencia de espacio ---
+    # Qué proporción de la superficie total es realmente útil/habitable
+    # (inverso conceptual de ratio_total_util, calculado aquí de forma
+    # independiente por si esta función se usa antes de esa otra).
+    df["eficiencia_espacio"] = (superficie_util_safe / superficie_total_safe).fillna(1.0)
+
+    return df
 
 # ------------------------------------------------------------------
 # Orquestación del pipeline completo
@@ -974,13 +1071,14 @@ def ejecutar_pipeline(
     df = imputar_antiguedad_anos_por_vecinos(df)
     df = eliminar_columnas_geograficas(df)
 
-    df = codificar_tipo_propiedad(df)
+    df = eliminar_columna_tipo_propiedad(df)
     df = convertir_columnas_a_numerico_final(df)
     df = codificar_comuna(df)
     df = crear_variable_amoblado(df)
     df = completar_superficies_faltantes(df)
     df = convertir_condominio_a_booleano(df)
     df = crear_ratio_superficie(df)
+    #df = crear_variables_derivadas(df) 
 
     df = guardar_resultado(df, ruta_salida_csv)
 

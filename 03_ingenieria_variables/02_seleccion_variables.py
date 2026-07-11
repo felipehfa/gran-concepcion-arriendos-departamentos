@@ -1,10 +1,12 @@
 import json
+import time
 import warnings
 from pathlib import Path
 from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from xgboost import XGBRegressor
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -40,8 +42,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # actual), para que funcione igual sin importar desde dónde se ejecute
 # (ej. VS Code con cwd en la raíz del repo en vez de en esta carpeta).
 SCRIPT_DIR  = Path(__file__).resolve().parent
-INPUT_PATH  = SCRIPT_DIR / "datos_ingenieria_variables.csv"
-OUTPUT_DIR  = SCRIPT_DIR   # los resultados quedan junto al script
+INPUT_PATH  = SCRIPT_DIR / "save" / "ingeniaria_variables" / "datos_ingenieria_variables.csv"
+OUTPUT_DIR  = SCRIPT_DIR / "save" / "seleccion_variables"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ID_COL     = "id_aviso"
@@ -74,13 +76,21 @@ K_MAX = None   # se determina dinámicamente
 N_SEEDS_K_CURVE = 5
 
 # Parámetros del XGBRegressor para selección de variables
+#
+# n_jobs=1 (no -1): en Windows, usar todos los núcleos dentro de un loop
+# que entrena 150 modelos (N_MODELS x CV_FOLDS) hace que el overhead de
+# crear/destruir el pool de hilos en cada fit() se acumule y el proceso
+# se vuelva extremadamente lento — a veces da la impresión de estar
+# colgado, aunque en realidad avanza muy despacio. Con datasets de este
+# tamaño (miles de filas, decenas de features), un solo hilo por modelo
+# es más rápido y estable que pelear por los núcleos en cada fit.
 XGB_PARAMS = dict(
     n_estimators     = 200,
     max_depth        = 4,
     learning_rate    = 0.05,
     subsample        = 0.8,
     colsample_bytree = 0.8,
-    n_jobs           = -1,
+    n_jobs           = 1,
     verbosity        = 0,
     eval_metric      = "mae",
 )
@@ -141,23 +151,21 @@ def _compute_importance(model: XGBRegressor,
                          X_fold: pd.DataFrame,
                          imp_type: str) -> dict:
     """
-    Calcula importancia SHAP mean abs sobre X_fold.
-    Fallback a 'weight' si shap no está disponible.
+    Calcula importancia SHAP mean abs sobre X_fold usando el TreeSHAP nativo
+    de xgboost (booster.predict(..., pred_contribs=True)), no la librería
+    `shap`: en este entorno Windows, `import shap` dispara una llamada a
+    scipy.linalg.inv que crashea el proceso a nivel de SO (incompatibilidad
+    del binario LAPACK vendorizado por scipy con esta CPU), sin traceback
+    de Python. El resultado de TreeSHAP nativo es equivalente.
+    Fallback a 'weight' si imp_type no es 'shap'.
     """
     booster = model.get_booster()
 
     if imp_type == "shap":
-        try:
-            import shap
-            explainer = shap.TreeExplainer(booster)
-            sv = explainer(X_fold).values
-            if sv.ndim == 3:
-                sv = sv[:, :, 0]
-            mean_abs = np.abs(sv).mean(axis=0)
-            return dict(zip(X_fold.columns, mean_abs.tolist()))
-        except ImportError:
-            print("    ⚠ shap no disponible — usando 'weight' como fallback")
-            imp_type = "weight"
+        contribs = booster.predict(xgb.DMatrix(X_fold), pred_contribs=True)
+        contribs = contribs[:, :-1]  # última columna = bias/expected value
+        mean_abs = np.abs(contribs).mean(axis=0)
+        return dict(zip(X_fold.columns, mean_abs.tolist()))
 
     raw = booster.get_score(importance_type=imp_type)
     return {feat: float(raw.get(feat, 0.0)) for feat in X_fold.columns}
@@ -193,7 +201,8 @@ def select_features_by_stability(
     all_rmse: list = []
 
     print(f"\n  Entrenando {n_models} modelos (importancia='{importance_type}', "
-          f"KFold aleatorio, {cv_folds} folds)...")
+          f"KFold aleatorio, {cv_folds} folds)...", flush=True)
+    t0 = time.time()
 
     for i in range(n_models):
         seed = random_seed_base + i
@@ -229,9 +238,11 @@ def select_features_by_stability(
             vals = fold_imps[feat]
             all_importances[feat].append(float(np.mean(vals)) if vals else 0.0)
 
-        if (i + 1) % 5 == 0 or i == 0:
-            print(f"    Modelo {i+1:>2}/{n_models}  "
-                  f"MAE_fold={all_mae[-1]:,.0f}  RMSE_fold={all_rmse[-1]:,.0f}")
+        elapsed = time.time() - t0
+        eta     = (elapsed / (i + 1)) * (n_models - i - 1)
+        print(f"    Modelo {i+1:>2}/{n_models}  "
+              f"MAE_fold={all_mae[-1]:,.0f}  RMSE_fold={all_rmse[-1]:,.0f}  "
+              f"[{elapsed:>5.1f}s transcurridos, ETA ~{eta:>5.1f}s]", flush=True)
 
     results = []
     for feat in X_train.columns:
@@ -317,10 +328,11 @@ def select_k_features_via_val(
     seeds     = [seed + i for i in range(n_seeds)]
 
     print(f"\n  Evaluando curva MAE/RMSE/R² vs k features (k={k_min}..{k_max_eff}, "
-          f"promediado sobre {n_seeds} semillas)...")
+          f"promediado sobre {n_seeds} semillas)...", flush=True)
     print(f"  Orden de candidatas por stability_score (primeras 10): {candidates[:10]}")
 
     records = []
+    t0_curve = time.time()
     for k in k_range:
         feats = candidates[:k]
 
@@ -353,9 +365,10 @@ def select_k_features_via_val(
             "r2_val": round(r2_k, 4),
         })
 
-        if k % 5 == 0 or k == k_min or k == k_max_eff:
-            print(f"    k={k:>3}  MAE={mae_k:,.0f} (±{mae_k_std:,.0f})  "
-                  f"RMSE={rmse_k:,.0f}  R²={r2_k:.3f}")
+        elapsed_curve = time.time() - t0_curve
+        print(f"    k={k:>3}  MAE={mae_k:,.0f} (±{mae_k_std:,.0f})  "
+              f"RMSE={rmse_k:,.0f}  R²={r2_k:.3f}  "
+              f"[{elapsed_curve:>5.1f}s transcurridos]", flush=True)
 
     metric_curve = pd.DataFrame(records)
 
@@ -438,7 +451,6 @@ def run_feature_selection(input_path: Path = INPUT_PATH,
     Exporta únicamente:
       - seleccion_variables_reporte.json  (todas las etapas)
       - selected_features.csv             (solo nombres de features finales)
-      - dataset_features_seleccionadas.csv (id + features finales + target)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -540,7 +552,6 @@ def run_feature_selection(input_path: Path = INPUT_PATH,
 
     json_path    = output_dir / "seleccion_variables_reporte.json"
     features_path = output_dir / "selected_features.csv"
-    dataset_path  = output_dir / "dataset_features_seleccionadas.csv"
 
     reporte = {
         "config": {
@@ -588,11 +599,6 @@ def run_feature_selection(input_path: Path = INPUT_PATH,
     if final_features:
         pd.DataFrame({"feature": final_features}).to_csv(features_path, index=False)
         print(f"  ✓ Nombres de features seleccionadas:  {features_path}")
-
-        cols_dataset = [ID_COL] + final_features + [TARGET_COL]
-        cols_dataset = [c for c in cols_dataset if c in raw_df.columns]
-        raw_df[cols_dataset].to_csv(dataset_path, index=False)
-        print(f"  ✓ Dataset con features + target:      {dataset_path}")
     else:
         print("  ⚠ No se seleccionaron features — revisa PRESENCE_THRESHOLD y K_MIN.")
 
