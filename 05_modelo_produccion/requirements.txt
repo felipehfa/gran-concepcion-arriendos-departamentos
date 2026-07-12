@@ -1,0 +1,16 @@
+# Playwright queda excluido a propósito: en 01_obtener_datos/02_scraper_detalle.py
+# el import vive dentro de main_fallback_playwright() (import perezoso, solo se
+# dispara con --fallback-playwright) y la ruta principal usada en producción es
+# 100% requests, así que no debe ser una dependencia obligatoria acá.
+pandas==3.0.3
+numpy==2.4.6
+scipy==1.17.1
+scikit-learn==1.9.0
+geopandas==1.1.4
+shapely==2.1.2
+requests==2.34.2
+beautifulsoup4==4.15.0
+joblib==1.5.3
+xgboost==3.2.0
+lightgbm==4.6.0
+optuna==4.9.0
