@@ -562,8 +562,10 @@ gran-concepcion-rentals/
 │   ├── 01_scraper_grilla_incremental.py
 │   ├── 02_scraper_detalle_incremental.py
 │   ├── 03_vulnerabilidad_produccion.py
+│   ├── migrar_poligonos_vulnerabilidad.py       # migración manual/local: shapefile -> tabla poligonos_vulnerabilidad_uv
 │   ├── 04_ingenieria_variables_produccion.py
 │   ├── 05_prediccion.py
+│   ├── requirements.txt                         # dependencias pineadas para GitHub Actions (sin geopandas ni playwright)
 │   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
 │   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
 │   └── entrenamiento/
@@ -704,6 +706,7 @@ al extremo):
 |---|---|
 | `avisos` | Nivel grilla + `estado_publicacion` (activo/pausado/finalizado/no_disponible) + `fecha_ultimo_chequeo_estado` + `intentos_fallidos_detalle` |
 | `avisos_detalle` | Nivel detalle (1:1 con `avisos`) + columnas de vulnerabilidad IGVUST resueltas directo (sin las tablas separadas `vulnerabilidad_uv`/`avisos_igvust` de la base original) |
+| `poligonos_vulnerabilidad_uv` | Polígonos de Unidad Vecinal (IGVUST) de las 10 comunas analizadas, precalculados una vez desde el shapefile y guardados como WKT (EPSG:4326) — ver etapa 3 |
 | `predicciones` | Una fila por `(id_aviso, version_modelo)` — precio predicho, z_robusto, decil, etiqueta, confianza |
 | `corridas` | Metadatos de cada corrida del orquestador (contadores, motivo de corte, resultado) |
 | `logs_ejecucion` | Log persistente por etapa, espejo de `logs/orquestador.log` pero consultable con SQL |
@@ -735,10 +738,14 @@ vía `importlib`, sin duplicar lógica de parsing/extracción):
    `avisos.intentos_fallidos_detalle`; al superar `MAX_INTENTOS_FALLIDOS_DETALLE = 5` fallos
    consecutivos, el aviso se marca `estado_publicacion = 'no_disponible'` y sale de la cola de
    pendientes (un éxito antes de llegar al umbral resetea el contador a 0).
-3. **`03_vulnerabilidad_produccion.py`** — cruce punto-en-polígono contra el mismo shapefile
-   IGVUST, resuelto directo a columnas de `avisos_detalle` (`uv_rsh`, `rank_nac`, `pob_rsh_uv`,
-   `p_urbano`, `c_ig_com`) — no a tablas de referencia separadas. Solo procesa avisos con
-   coordenadas y `uv_rsh` todavía `NULL` (incremental).
+3. **`03_vulnerabilidad_produccion.py`** — cruce punto-en-polígono contra los polígonos IGVUST ya
+   precalculados en la tabla `poligonos_vulnerabilidad_uv` (WKT, EPSG:4326), resuelto con
+   `shapely` puro (sin `geopandas`/GDAL) directo a columnas de `avisos_detalle` (`uv_rsh`,
+   `rank_nac`, `pob_rsh_uv`, `p_urbano`, `c_ig_com`) — no a tablas de referencia separadas. Solo
+   procesa avisos con coordenadas y `uv_rsh` todavía `NULL` (incremental). Esta etapa **ya no lee
+   el shapefile en cada corrida** (no está versionado en el repo, así que en GitHub Actions no
+   existiría): la tabla se llena una única vez —o cuando el shapefile se actualiza— corriendo a
+   mano `migrar_poligonos_vulnerabilidad.py` localmente, con geopandas instalado.
 4. **`04_ingenieria_variables_produccion.py`** — calcula las features seleccionadas del modelo
    para avisos nuevos (32 actualmente, leídas dinámicamente desde `selected_features.csv`; ver
    sección 13), pero **sin recalcular nada en modo batch** (a diferencia del pipeline de

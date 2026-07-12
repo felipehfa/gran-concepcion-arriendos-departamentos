@@ -1,15 +1,17 @@
 """
 Vulnerabilidad socioterritorial (IGVUST) — pipeline de producción.
 
-A diferencia de las demás etapas, NO reutiliza
-`01_obtener_datos/03_vulnerabilidad_socioterritorial.py` vía importlib: ese
-script es código de nivel de módulo (sin funciones, sin `if __name__ ==
-"__main__"`) que escribe directamente en la base de datos ORIGINAL apenas se
-importa — cargarlo dispararía esa escritura contra una base que para
-nosotros es de solo lectura. En su lugar, la lógica de cruce espacial
-(carga de shapefile, filtro de comunas, sjoin punto-en-polígono) se
-reimplementa acá; solo se duplican dos piezas chicas de configuración
-(`normalizar_nombre`, `COMUNAS_ANALIZADAS`).
+Los polígonos de Unidad Vecinal de las 10 comunas del Gran Concepción ya NO
+se leen desde el shapefile IGVUST en cada corrida: viven precalculados en la
+tabla `poligonos_vulnerabilidad_uv` de esta misma base de datos de
+producción. Esa tabla se llena UNA VEZ (o cada vez que el shapefile se
+actualiza) corriendo `migrar_poligonos_vulnerabilidad.py` a mano y
+localmente — no es parte de esta etapa ni del orquestador. Esto evita que el
+pipeline de producción dependa de un archivo externo no versionado en el
+repo (el shapefile está en .gitignore, así que en GitHub Actions no existe)
+y, de paso, saca a `geopandas`/GDAL de las dependencias de producción: el
+cruce punto-en-polígono se resuelve acá con `shapely` puro sobre la
+geometría ya guardada como WKT (en EPSG:4326).
 
 A diferencia de la base original (que guarda `vulnerabilidad_uv` y
 `avisos_igvust` como tablas de referencia separadas), acá el resultado del
@@ -18,15 +20,14 @@ cruce se resuelve DIRECTO a columnas de `avisos_detalle`
 
 Incremental: solo procesa avisos con coordenadas y uv_rsh todavía NULL. Una
 vez resuelto, no se vuelve a tocar (el cruce no cambia salvo que el
-shapefile mismo se actualice).
+shapefile mismo se actualice y se re-corra la migración).
 """
 
 import logging
 import unicodedata
-from pathlib import Path
 
-import geopandas as gpd
 import pandas as pd
+from shapely import wkt
 from shapely.geometry import Point
 
 import db
@@ -34,16 +35,12 @@ import db
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------
-# CONFIG
-# ------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-RUTA_SHAPEFILE = REPO_ROOT / "01_obtener_datos" / "datos_vulnerabilidad" / "202505_IGVUST_UV_cuartil.shp"
-
 # Mismo mapeo que `01_obtener_datos/03_vulnerabilidad_socioterritorial.py`:
 # slug de comuna (como en la columna `comuna` de producción) -> nombre tal
-# como aparece en el shapefile (columna "Comuna", mayúsculas sin tildes).
+# como aparece en el shapefile (columna "Comuna", mayúsculas sin tildes). Se
+# mantiene acá — aunque esta etapa ya no lee el shapefile — porque
+# `migrar_poligonos_vulnerabilidad.py` la reutiliza vía importlib para no
+# triplicar esta configuración.
 COMUNAS_ANALIZADAS = {
     "concepcion-biobio": "CONCEPCION",
     "talcahuano-biobio": "TALCAHUANO",
@@ -66,28 +63,30 @@ def normalizar_nombre(texto: str) -> str:
 
 
 # ------------------------------------------------------------------
-# Shapefile
+# Polígonos (desde la tabla precalculada, no desde el shapefile)
 # ------------------------------------------------------------------
-def cargar_poligonos_gran_concepcion(ruta_shapefile: Path = RUTA_SHAPEFILE) -> gpd.GeoDataFrame:
-    if not ruta_shapefile.exists():
-        raise FileNotFoundError(
-            f"No se encontró el shapefile de vulnerabilidad en {ruta_shapefile}. "
-            f"Es un dato externo no versionado en el repo (ver README, sección de vulnerabilidad)."
+def cargar_poligonos_gran_concepcion(con) -> list:
+    filas = con.execute("""
+        SELECT uv_rsh, comuna, rank_nac, pob_rsh_uv, p_urbano, c_ig_com, geometria_wkt
+        FROM poligonos_vulnerabilidad_uv
+    """).fetchall()
+
+    if not filas:
+        raise RuntimeError(
+            "La tabla poligonos_vulnerabilidad_uv está vacía. Corre "
+            "migrar_poligonos_vulnerabilidad.py una vez, localmente (con el "
+            "shapefile IGVUST disponible), antes de correr esta etapa."
         )
 
-    poligonos = gpd.read_file(ruta_shapefile)
-    poligonos["comuna_normalizada"] = poligonos["Comuna"].apply(normalizar_nombre)
-
-    nombres_buscados = set(COMUNAS_ANALIZADAS.values())
-    filtrado = poligonos[poligonos["comuna_normalizada"].isin(nombres_buscados)].copy()
-
-    encontradas = set(filtrado["comuna_normalizada"].unique())
-    no_encontradas = nombres_buscados - encontradas
-    if no_encontradas:
-        log.warning(f"No se encontraron Unidades Vecinales para: {no_encontradas}")
-
-    log.info(f"Unidades Vecinales del Gran Concepción cargadas: {len(filtrado)}")
-    return filtrado
+    poligonos = [
+        {
+            "uv_rsh": f[0], "comuna": f[1], "rank_nac": f[2], "pob_rsh_uv": f[3],
+            "p_urbano": f[4], "c_ig_com": f[5], "geometria": wkt.loads(f[6]),
+        }
+        for f in filas
+    ]
+    log.info(f"{len(poligonos)} polígonos de Unidad Vecinal cargados desde poligonos_vulnerabilidad_uv.")
+    return poligonos
 
 
 # ------------------------------------------------------------------
@@ -104,31 +103,22 @@ def obtener_avisos_pendientes(con) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------
-# Cruce espacial + guardado
+# Cruce espacial (shapely puro) + guardado
 # ------------------------------------------------------------------
-def resolver_vulnerabilidad(con, poligonos: gpd.GeoDataFrame, pendientes: pd.DataFrame) -> dict:
+def resolver_vulnerabilidad(con, poligonos: list, pendientes: pd.DataFrame) -> dict:
     if pendientes.empty:
         return {"avisos_procesados": 0, "avisos_sin_uv": 0}
 
-    geometria = [Point(lon, lat) for lat, lon in zip(pendientes["latitud"], pendientes["longitud"])]
-    avisos_geo = gpd.GeoDataFrame(pendientes, geometry=geometria, crs="EPSG:4326")
-
-    if poligonos.crs != avisos_geo.crs:
-        poligonos = poligonos.to_crs(avisos_geo.crs)
-
-    resultado = gpd.sjoin(avisos_geo, poligonos, how="left", predicate="within")
-    # sjoin puede duplicar filas si un punto cae en más de un polígono (no
-    # debería pasar con Unidades Vecinales, pero por seguridad nos quedamos
-    # con la primera coincidencia por id_aviso).
-    resultado = resultado.drop_duplicates(subset="id_aviso", keep="first")
-
-    columnas_a_guardar = ["uv_rsh", "rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com"]
-    columnas_disponibles = [c for c in columnas_a_guardar if c in resultado.columns]
-
     avisos_sin_uv = 0
-    for _, fila in resultado.iterrows():
-        valores = {c: fila.get(c) for c in columnas_disponibles}
-        if pd.isna(valores.get("uv_rsh")):
+    for _, fila in pendientes.iterrows():
+        punto = Point(fila["longitud"], fila["latitud"])
+        # Primera Unidad Vecinal cuyo polígono contiene el punto (no
+        # deberían solaparse entre sí, pero por seguridad nos quedamos con
+        # la primera coincidencia, igual que antes con
+        # drop_duplicates(keep="first") sobre el resultado de gpd.sjoin).
+        encontrado = next((p for p in poligonos if p["geometria"].contains(punto)), None)
+
+        if encontrado is None:
             avisos_sin_uv += 1
             continue
 
@@ -137,38 +127,16 @@ def resolver_vulnerabilidad(con, poligonos: gpd.GeoDataFrame, pendientes: pd.Dat
             SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?, c_ig_com = ?
             WHERE id_aviso = ?
         """, (
-            valores.get("uv_rsh"),
-            _a_real(valores.get("rank_nac")),
-            _a_entero(valores.get("pob_rsh_uv")),
-            _a_real(valores.get("p_urbano")),
-            _a_real(valores.get("c_ig_com")),
-            fila["id_aviso"],
+            encontrado["uv_rsh"], encontrado["rank_nac"], encontrado["pob_rsh_uv"],
+            encontrado["p_urbano"], encontrado["c_ig_com"], fila["id_aviso"],
         ))
 
     con.commit()
 
     return {
-        "avisos_procesados": len(resultado),
+        "avisos_procesados": len(pendientes),
         "avisos_sin_uv": avisos_sin_uv,
     }
-
-
-def _a_entero(valor):
-    if valor is None or pd.isna(valor):
-        return None
-    try:
-        return int(valor)
-    except (TypeError, ValueError):
-        return None
-
-
-def _a_real(valor):
-    if valor is None or pd.isna(valor):
-        return None
-    try:
-        return float(valor)
-    except (TypeError, ValueError):
-        return None
 
 
 # ------------------------------------------------------------------
@@ -181,7 +149,7 @@ def procesar_vulnerabilidad(con) -> dict:
     if pendientes.empty:
         return {"avisos_procesados": 0, "avisos_sin_uv": 0}
 
-    poligonos = cargar_poligonos_gran_concepcion()
+    poligonos = cargar_poligonos_gran_concepcion(con)
     resumen = resolver_vulnerabilidad(con, poligonos, pendientes)
 
     if resumen["avisos_sin_uv"]:

@@ -2,11 +2,18 @@
 # el import vive dentro de main_fallback_playwright() (import perezoso, solo se
 # dispara con --fallback-playwright) y la ruta principal usada en producción es
 # 100% requests, así que no debe ser una dependencia obligatoria acá.
+#
+# geopandas también queda excluido a propósito: 03_vulnerabilidad_produccion.py
+# ya no lee el shapefile IGVUST en cada corrida (no está versionado en el repo,
+# así que en GitHub Actions ni existiría), sino la tabla precalculada
+# poligonos_vulnerabilidad_uv de la propia BD de producción, resolviendo el
+# punto-en-polígono con shapely puro. geopandas solo hace falta para
+# migrar_poligonos_vulnerabilidad.py, que se corre a mano y localmente (ver ese
+# script), no como parte del pipeline automatizado.
 pandas==3.0.3
 numpy==2.4.6
 scipy==1.17.1
 scikit-learn==1.9.0
-geopandas==1.1.4
 shapely==2.1.2
 requests==2.34.2
 beautifulsoup4==4.15.0

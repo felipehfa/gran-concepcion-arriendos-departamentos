@@ -14,6 +14,13 @@ Tablas:
                         vulnerabilidad IGVUST resueltas directo, sin las
                         tablas `vulnerabilidad_uv`/`avisos_igvust` separadas
                         que usa la base de datos original)
+  - poligonos_vulnerabilidad_uv : polígonos de Unidad Vecinal (IGVUST) de las
+                        10 comunas analizadas, precalculados UNA VEZ desde el
+                        shapefile (ver migrar_poligonos_vulnerabilidad.py) y
+                        guardados como WKT en EPSG:4326 — así
+                        03_vulnerabilidad_produccion.py no depende del
+                        shapefile (no versionado en el repo) ni de geopandas
+                        en cada corrida de producción.
   - predicciones     : una fila por (id_aviso, version_modelo)
   - corridas         : metadatos de cada corrida del orquestador
   - logs_ejecucion   : log persistente de cada etapa, por corrida
@@ -254,6 +261,18 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             p_urbano                       REAL,
             c_ig_com                       REAL,
             fecha_scrapeo                  TEXT
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS poligonos_vulnerabilidad_uv (
+            uv_rsh         TEXT PRIMARY KEY,
+            comuna         TEXT NOT NULL,
+            rank_nac       REAL,
+            pob_rsh_uv     INTEGER,
+            p_urbano       REAL,
+            c_ig_com       REAL,
+            geometria_wkt  TEXT NOT NULL
         )
     """)
 
