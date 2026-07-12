@@ -29,7 +29,7 @@ El proyecto cubre cinco etapas encadenadas:
 ```
 01_obtener_datos/
   01_scraper_grilla.py                  → tabla `avisos`               (requests + BeautifulSoup)
-  02_scraper_detalle.py                 → tabla `avisos_detalle`       (Playwright + stealth)
+  02_scraper_detalle.py                 → tabla `avisos_detalle`       (requests; Playwright solo como respaldo)
   03_vulnerabilidad_socioterritorial.py → tablas `vulnerabilidad_uv`,
                                            `avisos_igvust`               (geopandas, cruce espacial)
         │  (todo persiste en avisos_gran_concepcion.db, SQLite)
@@ -71,13 +71,19 @@ modelamiento) no es necesario correr los scrapers desde cero.
 
 ### 2.1. Requisitos
 
-Instala las dependencias de Python (ver sección [Dependencias](#10-dependencias)) y, si vas a
-correr el scraper de detalle, los navegadores de Playwright:
+Instala las dependencias de Python (ver sección [Dependencias](#10-dependencias)):
 
 ```bash
-pip install requests beautifulsoup4 lxml pandas playwright playwright-stealth \
+pip install requests beautifulsoup4 lxml pandas \
             geopandas shapely scikit-learn joblib xgboost lightgbm optuna scipy
+```
 
+Playwright **no es necesario** para el camino normal (ambos scrapers usan `requests`, sin
+navegador). Solo instálalo si vas a usar la ruta de respaldo de `02_scraper_detalle.py`
+(`--fallback-playwright`, ver sección 3.2):
+
+```bash
+pip install playwright playwright-stealth
 playwright install chromium
 ```
 
@@ -100,10 +106,17 @@ python 04_modelamiento/03_random_forest.py  # comparación
 # 1. Grilla de búsqueda (requests + BeautifulSoup, sin navegador)
 python 01_obtener_datos/01_scraper_grilla.py
 
-# 2. Detalle de cada aviso (Playwright, más lento y más sensible a bloqueo).
+# 2. Detalle de cada aviso (requests, sin navegador - más sensible a bloqueo que
+#    la grilla por el volumen de visitas, aunque no se ha observado bloqueo en la práctica).
 #    Pensado para correr en tandas vía cron, no de una sola sentada
 #    (ver LIMITE_POR_CORRIDA y COOLDOWN_TRAS_CAPTCHA_MINUTOS en el script).
 python 01_obtener_datos/02_scraper_detalle.py
+
+# 2b. Solo si la ruta principal empezara a bloquearse de forma persistente (no
+#     observado hasta ahora) o necesitas resolver un CAPTCHA a mano: ruta de
+#     respaldo con Playwright (requiere pip install playwright playwright-stealth
+#     && playwright install chromium - ver sección 2.1).
+# python 01_obtener_datos/02_scraper_detalle.py --fallback-playwright
 
 # 3. Cruce geoespacial con el índice de vulnerabilidad socioterritorial (IGVUST).
 #    Requiere el shapefile 202505_IGVUST_UV_cuartil.(shp/dbf/shx/prj) en
@@ -154,8 +167,18 @@ fila.
 
 - Arquitectura de **dos scrapers separados**: `01_scraper_grilla.py` recorre las páginas de
   resultados de búsqueda (requests + BeautifulSoup, sin navegador), y `02_scraper_detalle.py`
-  visita cada aviso individual (Playwright) para extraer descripción, características y
-  puntos de interés cercanos.
+  visita cada aviso individual (también requests, sin navegador) para extraer descripción,
+  características y puntos de interés cercanos.
+- **Migración de Playwright a `requests`** (confirmada equivalente con pruebas de 6 URLs
+  comparadas 1:1 y una corrida de volumen de 150 requests seguidas, sin señales de bloqueo):
+  el HTML servido por el sitio ya trae server-side el mismo JSON embebido y el mismo texto de
+  características que renderizaba Playwright, así que dejó de ser necesario un navegador para
+  la ruta normal. La lógica de Playwright se conservó como **ruta de respaldo**
+  (`main_fallback_playwright()`, invocable con `--fallback-playwright`) para el caso de que el
+  sitio empiece a bloquear las requests simples, o para resolver un CAPTCHA a mano. Su import
+  es **perezoso** (ocurre recién al llamar esa función), así que el resto del script - incluida
+  la ruta principal - funciona sin problema en entornos donde Playwright no está instalado (ej.
+  GitHub Actions).
 - **Guardado incremental y diseño reanudable**: cada página/aviso se persiste con commit
   inmediato en SQLite; el scraper de grilla usa `INSERT OR IGNORE` sobre `id_aviso`, y el de
   detalle retoma solo los avisos pendientes vía un `LEFT JOIN` entre `avisos` y
@@ -167,10 +190,20 @@ fila.
   HTML visible, porque ese JSON trae todas las categorías completas aunque el usuario no haya
   abierto esa pestaña. Se consideran "cercanos" solo los que están dentro de un **radio de
   500 metros**.
-- **Mitigaciones de bloqueo**: `playwright-stealth`, delays variables entre requests, y
+- **Mitigaciones de bloqueo**: delays variables entre requests, reintento automático (con
+  backoff corto) ante un fallo de red/HTTP aislado dentro de la misma corrida - confirmado que
+  un 404 puntual puede ser transitorio y no reproducirse al reintentar segundos después - y
   detección de CAPTCHA por **doble condición** (la palabra "captcha" aparece en el HTML **Y**
   el contenido normal del aviso no cargó) para no confundir el script de reCAPTCHA de fondo
   (presente casi siempre) con un bloqueo real.
+- **Fallos persistentes entre corridas** (`05_modelo_produccion/02_scraper_detalle_incremental.py`):
+  un aviso que falla incluso tras los reintentos nunca queda en `avisos_detalle`, así que sin
+  más el `LEFT JOIN` de pendientes lo volvería a traer en cada corrida futura sin límite -
+  incluso si el aviso fue realmente eliminado del sitio. El contador
+  `avisos.intentos_fallidos_detalle` suma 1 en cada fallo y se resetea a 0 en cuanto el aviso
+  se scrapea con éxito; al superar `MAX_INTENTOS_FALLIDOS_DETALLE = 5` fallos consecutivos, el
+  aviso se marca `estado_publicacion = 'no_disponible'` (estado distinto de `'finalizado'`, que
+  significa que el arriendo terminó con normalidad) y sale de la cola de pendientes.
 - **Bug corregido: `avisos_detalle.banos` capturaba la superficie, no los baños.** El regex
   original (`RE_BANOS`, con `re.IGNORECASE`) encontraba primero la insignia superior de la
   página ("2 baños\n75 m² totales", número **antes** de la palabra, en minúscula) en vez de la
@@ -482,7 +515,7 @@ El repo no incluye un `requirements.txt`; estas son las dependencias reales, inf
 | Etapa                          | Librerías                                                        |
 |----------------------------------|-------------------------------------------------------------------|
 | Scraping (grilla)                | `requests`, `beautifulsoup4`, `lxml`, `pandas`                    |
-| Scraping (detalle)                | `playwright`, `playwright-stealth` (opcional), `pandas`            |
+| Scraping (detalle)                | `requests`, `beautifulsoup4`, `lxml`, `pandas` — `playwright`/`playwright-stealth` opcionales, solo para la ruta de respaldo (`--fallback-playwright`) |
 | Vulnerabilidad socioterritorial   | `geopandas`, `shapely`, `pandas`                                   |
 | Ingeniería de variables           | `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn`            |
 | Selección de variables            | `pandas`, `numpy`, `xgboost`, `optuna`, `scikit-learn`             |
@@ -491,8 +524,11 @@ El repo no incluye un `requirements.txt`; estas son las dependencias reales, inf
 Instalación sugerida (sin versiones pineadas, ya que no existen en el repo):
 
 ```bash
-pip install requests beautifulsoup4 lxml pandas playwright playwright-stealth \
+pip install requests beautifulsoup4 lxml pandas \
             geopandas shapely scikit-learn joblib xgboost lightgbm optuna scipy
+
+# Opcional, solo para la ruta de respaldo de 02_scraper_detalle.py:
+pip install playwright playwright-stealth
 playwright install chromium
 ```
 
@@ -519,9 +555,10 @@ playwright install chromium
 - Depende de la estructura HTML y las clases CSS del sitio, que pueden cambiar sin aviso —
   varios extractores usan regex sobre texto en español como respaldo, pero no eliminan el
   riesgo por completo.
-- Riesgo de bloqueo/CAPTCHA, mitigado pero no eliminado por `playwright-stealth`, delays
-  variables y ejecución en tandas pequeñas vía cron; existe un modo manual de resolución de
-  CAPTCHA como respaldo.
+- Riesgo de bloqueo/CAPTCHA, mitigado pero no eliminado por delays variables, reintentos con
+  backoff y ejecución en tandas pequeñas vía cron; existe una ruta de respaldo con Playwright
+  (incluido un modo manual de resolución de CAPTCHA) por si la ruta principal con `requests`
+  empezara a bloquearse.
 - Las coordenadas geográficas de cada aviso suelen ser aproximadas al sector (no la dirección
   exacta), por diseño del sitio de origen — esto acota la precisión de las variables espaciales
   derivadas (distancias, comparables cercanos, cruce con Unidad Vecinal).
@@ -565,7 +602,7 @@ al extremo):
 
 | Tabla | Contenido |
 |---|---|
-| `avisos` | Nivel grilla + `estado_publicacion` (activo/pausado/finalizado) + `fecha_ultimo_chequeo_estado` |
+| `avisos` | Nivel grilla + `estado_publicacion` (activo/pausado/finalizado/no_disponible) + `fecha_ultimo_chequeo_estado` + `intentos_fallidos_detalle` |
 | `avisos_detalle` | Nivel detalle (1:1 con `avisos`) + columnas de vulnerabilidad IGVUST resueltas directo (sin las tablas separadas `vulnerabilidad_uv`/`avisos_igvust` de la base original) |
 | `predicciones` | Una fila por `(id_aviso, version_modelo)` — precio predicho, z_robusto, decil, etiqueta, confianza |
 | `corridas` | Metadatos de cada corrida del orquestador (contadores, motivo de corte, resultado) |
@@ -580,14 +617,19 @@ vía `importlib`, sin duplicar lógica de parsing/extracción):
    `MAX_PAGINAS_VACIAS_CONSECUTIVAS = 10` páginas seguidas sin avisos nuevos (por combinación
    comuna×tipo), o por techo de presupuesto (`MAX_PAGINAS_POR_CORRIDA = 200`,
    `MAX_MINUTOS_POR_CORRIDA = 30`) si se alcanza antes — el motivo de corte queda registrado.
-2. **`02_scraper_detalle_incremental.py`** — visita avisos nuevos sin detalle, y además
-   **re-chequea** avisos `activo` con más de `DIAS_MIN_ENTRE_RECHEQUEOS = 7` días desde su
-   último chequeo (batch de `MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50`, los más antiguos primero).
-   Extrae `estado_publicacion` del mismo JSON embebido que ya se usa para los puntos de interés
-   (busca el componente `item_status_message`/`item_status_short_description_message` dentro de
-   `components.head`/`components.short_description`; si no aparece, el aviso está activo). El
-   guardado usa **UPSERT** (no `INSERT OR REPLACE`) para que un re-chequeo nunca borre las
-   columnas de vulnerabilidad que llena la etapa siguiente.
+2. **`02_scraper_detalle_incremental.py`** — visita avisos nuevos sin detalle (vía
+   `sd.obtener_detalle_aviso`, ruta `requests` de `01_obtener_datos/02_scraper_detalle.py`, sin
+   navegador), y además **re-chequea** avisos `activo` con más de `DIAS_MIN_ENTRE_RECHEQUEOS = 7`
+   días desde su último chequeo (batch de `MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50`, los más
+   antiguos primero). Extrae `estado_publicacion` del mismo JSON embebido que ya se usa para los
+   puntos de interés (busca el componente `item_status_message`/`item_status_short_description_message`
+   dentro de `components.head`/`components.short_description`; si no aparece, el aviso está
+   activo). El guardado usa **UPSERT** (no `INSERT OR REPLACE`) para que un re-chequeo nunca
+   borre las columnas de vulnerabilidad que llena la etapa siguiente. **Fallos persistentes**:
+   cada fallo de scraping (agotados los reintentos de esa corrida) suma 1 a
+   `avisos.intentos_fallidos_detalle`; al superar `MAX_INTENTOS_FALLIDOS_DETALLE = 5` fallos
+   consecutivos, el aviso se marca `estado_publicacion = 'no_disponible'` y sale de la cola de
+   pendientes (un éxito antes de llegar al umbral resetea el contador a 0).
 3. **`03_vulnerabilidad_produccion.py`** — cruce punto-en-polígono contra el mismo shapefile
    IGVUST, resuelto directo a columnas de `avisos_detalle` (no a tablas de referencia
    separadas). Solo procesa avisos con coordenadas y `uv_rsh` todavía `NULL` (incremental).

@@ -2,22 +2,39 @@
 Scraper de DETALLE incremental — pipeline de producción.
 
 No duplica el parsing HTML/JSON: carga `01_obtener_datos/02_scraper_detalle.py`
-como módulo (vía importlib) y reutiliza `extraer_detalle`,
-`extraer_json_estado_pagina`, `calcular_distancias_centro`, `hay_captcha`,
-`esperar_resolucion_manual`, `simular_comportamiento_humano`,
-`construir_referer`, y sus constantes.
+como módulo (vía importlib) y reutiliza su ruta principal basada en requests
+- en particular `obtener_detalle_aviso` (fetch + reintento + extracción
+completa en un solo llamado), además de `extraer_json_estado_pagina`,
+`calcular_distancias_centro`, `construir_referer` y sus constantes. Ya no
+depende de Playwright: no abre navegador ni sesión alguna, así que esta
+etapa (y el orquestador que la llama) funcionan en entornos sin Playwright
+instalado (ej. GitHub Actions).
 
-Dos responsabilidades, en la misma sesión de Playwright:
+Dos responsabilidades:
   1. Avisos NUEVOS de producción sin detalle todavía (LEFT JOIN, igual que
      el script original pero contra las tablas de producción).
   2. RE-CHEQUEO de avisos con estado_publicacion='activo' cuyo último
      chequeo tiene más de DIAS_MIN_ENTRE_RECHEQUEOS días, en batches de
      MAX_AVISOS_RECHEQUEO_POR_CORRIDA (los más antiguos primero).
 
-Extrae además `estado_publicacion` (activo/pausado/finalizado) del mismo
-JSON embebido que ya se usa para los puntos de interés, buscando el
+Extrae además `estado_publicacion` (activo/pausado/finalizado/no_disponible)
+del mismo JSON embebido que ya se usa para los puntos de interés, buscando el
 componente item_status_message / item_status_short_description_message
 dentro de components.head o components.short_description.
+
+FALLOS PERSISTENTES ENTRE CORRIDAS (`intentos_fallidos_detalle`):
+Un aviso que falla (404/error, incluso tras agotar los reintentos DENTRO de
+`obtener_detalle_aviso` para esa misma corrida) nunca queda en
+`avisos_detalle`, así que el LEFT JOIN de `obtener_pendientes_nuevos` lo
+seguiría trayendo en TODAS las corridas futuras sin límite - incluso si el
+aviso fue realmente eliminado del sitio (fallo permanente, no un hipo de
+red). Para evitar eso: cada fallo suma 1 al contador
+`avisos.intentos_fallidos_detalle`; si supera MAX_INTENTOS_FALLIDOS_DETALLE,
+el aviso se marca `estado_publicacion='no_disponible'` (estado distinto de
+'finalizado', que significa que el arriendo terminó con normalidad - acá
+significa "no pudimos scrapear su detalle tras varios intentos") y sale de
+la cola de pendientes. Un éxito posterior antes de llegar al umbral
+resetea el contador a 0.
 
 El guardado usa UPSERT (ON CONFLICT DO UPDATE) en vez de INSERT OR REPLACE:
 así una re-visita nunca borra las columnas de vulnerabilidad
@@ -46,6 +63,11 @@ LIMITE_NUEVOS_POR_CORRIDA = 2000
 DIAS_MIN_ENTRE_RECHEQUEOS = 7
 MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50
 
+# Umbral de fallos de scraping CONSECUTIVOS (entre corridas) antes de marcar
+# un aviso como 'no_disponible' y sacarlo de la cola de pendientes - ver
+# nota sobre `intentos_fallidos_detalle` más arriba.
+MAX_INTENTOS_FALLIDOS_DETALLE = 5
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 SCRAPER_DETALLE_ORIGINAL_PATH = REPO_ROOT / "01_obtener_datos" / "02_scraper_detalle.py"
@@ -60,7 +82,6 @@ def _cargar_modulo_scraper_detalle():
 
 sd = _cargar_modulo_scraper_detalle()
 
-MODO_MANUAL_CAPTCHA = sd.MODO_MANUAL_CAPTCHA
 COOLDOWN_TRAS_CAPTCHA_MINUTOS = sd.COOLDOWN_TRAS_CAPTCHA_MINUTOS
 
 
@@ -193,11 +214,19 @@ def _convertir_datos(datos: dict) -> dict:
 # Consultas de pendientes
 # ------------------------------------------------------------------
 def obtener_pendientes_nuevos(con, limite: int = LIMITE_NUEVOS_POR_CORRIDA) -> pd.DataFrame:
+    """
+    Excluye explícitamente estado_publicacion='no_disponible': esos avisos ya
+    superaron MAX_INTENTOS_FALLIDOS_DETALLE y nunca van a tener fila en
+    avisos_detalle, así que sin este filtro el LEFT JOIN los traería de
+    vuelta en TODAS las corridas futuras sin límite (justo lo que
+    intentos_fallidos_detalle busca evitar).
+    """
     pendientes = pd.read_sql_query("""
         SELECT a.id_aviso, a.url, a.comuna, a.tipo_propiedad
         FROM avisos a
         LEFT JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
         WHERE d.id_aviso IS NULL
+          AND a.estado_publicacion != 'no_disponible'
     """, con)
     pendientes = pendientes.dropna(subset=["url"])
     return pendientes.head(limite)
@@ -293,47 +322,49 @@ def tiempo_restante_cooldown(con) -> timedelta:
 # ------------------------------------------------------------------
 # Visita de un aviso (nuevo o re-chequeo)
 # ------------------------------------------------------------------
-def visitar_aviso(page, con, fila, es_rechequeo: bool) -> str:
-    """Devuelve: 'ok', 'cambio_estado' (solo relevante en re-chequeo),
-    'captcha' o 'error'."""
+def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
+    """
+    Devuelve: 'ok', 'cambio_estado' (solo relevante en re-chequeo),
+    'captcha' o 'error'.
+
+    Usa la ruta principal (requests) de 01_obtener_datos/02_scraper_detalle.py
+    vía `sd.obtener_detalle_aviso`, que ya incluye reintento ante fallos
+    transitorios DENTRO de esta misma corrida. Si aun así devuelve "error",
+    se suma 1 al contador `intentos_fallidos_detalle` de este aviso (fallo
+    PERSISTENTE, entre corridas) y, si supera el umbral, se marca el aviso
+    como 'no_disponible' para que salga de la cola de pendientes.
+    """
     id_aviso = fila["id_aviso"]
     url = fila["url"]
-    referer = sd.construir_referer(fila["comuna"], fila["tipo_propiedad"])
 
     log.info(f"{'Re-chequeando' if es_rechequeo else 'Visitando'} {id_aviso}: {url}")
 
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=30000, referer=referer)
-        sd.simular_comportamiento_humano(page)
-        page.wait_for_timeout(1000)
-    except sd.PlaywrightTimeoutError:
-        log.warning(f"Timeout cargando {url}. Se salta (queda pendiente para la próxima corrida).")
-        return "error"
-    except Exception as e:
-        log.warning(f"Error navegando a {url}: {e}. Se salta.")
+    resultado = sd.obtener_detalle_aviso(url, fila["comuna"], fila["tipo_propiedad"])
+
+    if resultado["resultado"] == "captcha":
+        log.error(f"CAPTCHA detectado en {url}. Deteniendo la corrida ahora mismo. "
+                  f"Cooldown de {COOLDOWN_TRAS_CAPTCHA_MINUTOS} minutos antes de la próxima.")
+        registrar_captcha(con)
+        return "captcha"
+
+    if resultado["resultado"] == "error":
+        nuevo_contador = db.incrementar_intentos_fallidos_detalle(con, id_aviso)
+        log.warning(f"No se pudo obtener {id_aviso} tras reintentos ({resultado['motivo']}). "
+                    f"intentos_fallidos_detalle={nuevo_contador}.")
+        if nuevo_contador > MAX_INTENTOS_FALLIDOS_DETALLE:
+            actualizar_estado_publicacion(con, id_aviso, "no_disponible")
+            log.warning(f"{id_aviso} superó MAX_INTENTOS_FALLIDOS_DETALLE={MAX_INTENTOS_FALLIDOS_DETALLE} "
+                        f"fallos consecutivos. Se marca estado_publicacion='no_disponible' y sale de "
+                        f"la cola de pendientes.")
+        time.sleep(random.uniform(sd.DELAY_MIN, sd.DELAY_MAX))
         return "error"
 
-    if sd.hay_captcha(page):
-        if MODO_MANUAL_CAPTCHA:
-            resuelto = sd.esperar_resolucion_manual(page, url)
-            if not resuelto:
-                log.error("Sigue detectándose CAPTCHA después del intento manual. Deteniendo la corrida.")
-                registrar_captcha(con)
-                return "captcha"
-        else:
-            log.error(f"CAPTCHA detectado en {url}. Deteniendo la corrida ahora mismo. "
-                      f"Cooldown de {COOLDOWN_TRAS_CAPTCHA_MINUTOS} minutos antes de la próxima.")
-            registrar_captcha(con)
-            return "captcha"
-
-    datos = sd.extraer_detalle(page)
-    estado_json = sd.extraer_json_estado_pagina(page)
-    estado_publicacion = extraer_estado_publicacion(estado_json)
-    distancias = sd.calcular_distancias_centro(datos.get("latitud"), datos.get("longitud"), fila["comuna"])
-    datos.update(distancias)
+    datos = resultado["datos"]
+    estado_publicacion = extraer_estado_publicacion(resultado.get("estado_json"))
 
     guardar_detalle_produccion(con, id_aviso, datos)
     actualizar_estado_publicacion(con, id_aviso, estado_publicacion)
+    db.resetear_intentos_fallidos_detalle(con, id_aviso)
 
     log.info(f"  -> Guardado. estado_publicacion={estado_publicacion}")
 
@@ -348,21 +379,15 @@ def visitar_aviso(page, con, fila, es_rechequeo: bool) -> str:
 # MAIN
 # ------------------------------------------------------------------
 def scrapear_detalle_incremental(con) -> dict:
-    if not MODO_MANUAL_CAPTCHA:
-        restante = tiempo_restante_cooldown(con)
-        if restante:
-            minutos = int(restante.total_seconds() // 60) + 1
-            log.warning(f"En cooldown tras un CAPTCHA reciente. Faltan ~{minutos} minutos. "
-                        f"No se hace nada en esta corrida.")
-            return {
-                "nuevos_procesados": 0, "rechequeos_procesados": 0,
-                "cambios_estado": 0, "detenido_por_captcha": False,
-            }
-    else:
-        log.info("MODO_MANUAL_CAPTCHA activado: navegador visible, cooldown desactivado.")
-
-    if not sd.STEALTH_DISPONIBLE:
-        log.warning("playwright-stealth no está instalado. Riesgo de bloqueo más alto.")
+    restante = tiempo_restante_cooldown(con)
+    if restante:
+        minutos = int(restante.total_seconds() // 60) + 1
+        log.warning(f"En cooldown tras un CAPTCHA reciente. Faltan ~{minutos} minutos. "
+                    f"No se hace nada en esta corrida.")
+        return {
+            "nuevos_procesados": 0, "rechequeos_procesados": 0,
+            "cambios_estado": 0, "detenido_por_captcha": False,
+        }
 
     pendientes_nuevos = obtener_pendientes_nuevos(con)
     pendientes_rechequeo = obtener_pendientes_rechequeo(con)
@@ -382,33 +407,24 @@ def scrapear_detalle_incremental(con) -> dict:
     cambios_estado = 0
     detenido_por_captcha = False
 
-    with sd.sync_playwright() as p:
-        browser = p.chromium.launch(headless=not MODO_MANUAL_CAPTCHA)
-        context = browser.new_context(user_agent=sd.USER_AGENT, locale="es-CL")
-        if sd.STEALTH_DISPONIBLE:
-            sd.Stealth().apply_stealth_sync(context)
-        page = context.new_page()
+    for _, fila in pendientes_nuevos.iterrows():
+        resultado = visitar_aviso(con, fila, es_rechequeo=False)
+        if resultado == "captcha":
+            detenido_por_captcha = True
+            break
+        if resultado == "ok":
+            nuevos_procesados += 1
 
-        for _, fila in pendientes_nuevos.iterrows():
-            resultado = visitar_aviso(page, con, fila, es_rechequeo=False)
+    if not detenido_por_captcha:
+        for _, fila in pendientes_rechequeo.iterrows():
+            resultado = visitar_aviso(con, fila, es_rechequeo=True)
             if resultado == "captcha":
                 detenido_por_captcha = True
                 break
-            if resultado == "ok":
-                nuevos_procesados += 1
-
-        if not detenido_por_captcha:
-            for _, fila in pendientes_rechequeo.iterrows():
-                resultado = visitar_aviso(page, con, fila, es_rechequeo=True)
-                if resultado == "captcha":
-                    detenido_por_captcha = True
-                    break
-                if resultado in ("ok", "cambio_estado"):
-                    rechequeos_procesados += 1
-                if resultado == "cambio_estado":
-                    cambios_estado += 1
-
-        browser.close()
+            if resultado in ("ok", "cambio_estado"):
+                rechequeos_procesados += 1
+            if resultado == "cambio_estado":
+                cambios_estado += 1
 
     return {
         "nuevos_procesados": nuevos_procesados,

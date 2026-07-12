@@ -62,8 +62,94 @@ def conectar_produccion(ruta_bd: Path = RUTA_BD_PRODUCCION) -> sqlite3.Connectio
     y se asegura de que las tablas existan."""
     con = sqlite3.connect(ruta_bd)
     con.execute("PRAGMA foreign_keys = ON")
+    _migrar_esquema_avisos(con)
     inicializar_bd_produccion(con)
     return con
+
+
+# ------------------------------------------------------------------
+# Migración de `avisos` sobre una base de datos YA existente (con datos)
+# ------------------------------------------------------------------
+def _migrar_esquema_avisos(con: sqlite3.Connection) -> None:
+    """
+    Migración idempotente, pensada para correr en cada conexión sin que haga
+    falta un paso manual aparte:
+      1. Si la tabla `avisos` todavía no existe, no hace nada - la
+         CREATE TABLE IF NOT EXISTS de inicializar_bd_produccion() más abajo
+         ya trae el esquema final completo (columna + estado incluidos).
+      2. Si existe pero le falta la columna `intentos_fallidos_detalle`
+         (contador de fallos de scraping consecutivos, ver
+         02_scraper_detalle_incremental.py), la agrega con
+         ALTER TABLE ... ADD COLUMN - operación segura e inmediata en
+         SQLite, no reescribe filas y aplica el DEFAULT a las ya existentes.
+      3. Si el CHECK de `estado_publicacion` todavía no incluye
+         'no_disponible' (estado nuevo para avisos que superaron el umbral
+         de fallos persistentes, distinto de 'finalizado' = arriendo
+         terminado con normalidad), reconstruye la tabla completa: SQLite no
+         permite modificar un CHECK con ALTER TABLE, así que se crea
+         `avisos_nuevo` con el esquema final, se copian todas las filas tal
+         cual, y se reemplaza la tabla vieja - todo dentro de una
+         transacción con foreign_keys desactivadas (procedimiento
+         recomendado por SQLite para reconstrucciones de tabla), con
+         rollback si algo falla a mitad de camino.
+    """
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(avisos)").fetchall()}
+    if not columnas:
+        return
+
+    if "intentos_fallidos_detalle" not in columnas:
+        con.execute("ALTER TABLE avisos ADD COLUMN intentos_fallidos_detalle INTEGER DEFAULT 0")
+        con.commit()
+
+    definicion_actual = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='avisos'"
+    ).fetchone()[0]
+    if "no_disponible" in definicion_actual:
+        return
+
+    filas_antes = con.execute("SELECT COUNT(*) FROM avisos").fetchone()[0]
+
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.execute("BEGIN")
+        con.execute("""
+            CREATE TABLE avisos_nuevo (
+                id_aviso                    TEXT PRIMARY KEY,
+                comuna                      TEXT NOT NULL,
+                tipo_propiedad              TEXT NOT NULL,
+                operacion                   TEXT NOT NULL,
+                titulo                      TEXT,
+                precio                      REAL,
+                moneda                      TEXT,
+                ubicacion                   TEXT,
+                dormitorios                 INTEGER,
+                banos                       INTEGER,
+                superficie_m2               REAL,
+                url                         TEXT,
+                first_seen                  TEXT,
+                estado_publicacion          TEXT NOT NULL DEFAULT 'activo'
+                                             CHECK(estado_publicacion IN
+                                                   ('activo', 'pausado', 'finalizado', 'no_disponible')),
+                fecha_ultimo_chequeo_estado TEXT,
+                intentos_fallidos_detalle   INTEGER DEFAULT 0
+            )
+        """)
+        con.execute("INSERT INTO avisos_nuevo SELECT * FROM avisos")
+        con.execute("DROP TABLE avisos")
+        con.execute("ALTER TABLE avisos_nuevo RENAME TO avisos")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+    filas_despues = con.execute("SELECT COUNT(*) FROM avisos").fetchone()[0]
+    if filas_despues != filas_antes:
+        raise RuntimeError(
+            f"Migración de `avisos` perdió filas: antes={filas_antes}, después={filas_despues}. "
+            f"Revisa manualmente antes de seguir."
+        )
 
 
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
@@ -93,8 +179,10 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             url                         TEXT,
             first_seen                  TEXT,
             estado_publicacion          TEXT NOT NULL DEFAULT 'activo'
-                                         CHECK(estado_publicacion IN ('activo', 'pausado', 'finalizado')),
-            fecha_ultimo_chequeo_estado TEXT
+                                         CHECK(estado_publicacion IN
+                                               ('activo', 'pausado', 'finalizado', 'no_disponible')),
+            fecha_ultimo_chequeo_estado TEXT,
+            intentos_fallidos_detalle   INTEGER DEFAULT 0
         )
     """)
 
@@ -199,6 +287,30 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
         )
     """)
 
+    con.commit()
+
+
+# ------------------------------------------------------------------
+# Helpers de `avisos.intentos_fallidos_detalle`
+# (fallos persistentes de scraping ENTRE corridas - ver
+# 02_scraper_detalle_incremental.py para el umbral y la lógica de cuándo
+# marcar un aviso como 'no_disponible')
+# ------------------------------------------------------------------
+def incrementar_intentos_fallidos_detalle(con: sqlite3.Connection, id_aviso: str) -> int:
+    """Suma 1 al contador de fallos consecutivos de este aviso y devuelve el nuevo valor."""
+    con.execute(
+        "UPDATE avisos SET intentos_fallidos_detalle = COALESCE(intentos_fallidos_detalle, 0) + 1 "
+        "WHERE id_aviso = ?",
+        (id_aviso,),
+    )
+    con.commit()
+    fila = con.execute("SELECT intentos_fallidos_detalle FROM avisos WHERE id_aviso = ?", (id_aviso,)).fetchone()
+    return fila[0] if fila else 0
+
+
+def resetear_intentos_fallidos_detalle(con: sqlite3.Connection, id_aviso: str) -> None:
+    """Vuelve el contador a 0 - se llama cuando un aviso finalmente se scrapea con éxito."""
+    con.execute("UPDATE avisos SET intentos_fallidos_detalle = 0 WHERE id_aviso = ?", (id_aviso,))
     con.commit()
 
 

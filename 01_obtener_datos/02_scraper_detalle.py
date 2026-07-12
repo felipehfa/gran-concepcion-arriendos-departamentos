@@ -3,8 +3,9 @@ Scraper de DETALLE - Portal Inmobiliario (Gran Concepción)
 
 Complementa al scraper de grilla (01_scraper_grilla.py). Este script:
   1. Lee los avisos ya descubiertos en avisos_gran_concepcion.db (tabla `avisos`).
-  2. Visita cada URL individual con Playwright y extrae: descripción completa,
-     fecha de publicación, y características principales del inmueble.
+  2. Visita cada URL individual con requests (ruta principal, sin navegador)
+     y extrae: descripción completa, fecha de publicación, y características
+     principales del inmueble.
   3. Guarda cada aviso INMEDIATAMENTE (commit por aviso) en la MISMA base de
      datos, en una tabla nueva: `avisos_detalle` (dentro de avisos_gran_concepcion.db).
   4. Es reanudable: si se corta a mitad de camino (bloqueo, corte de luz,
@@ -12,16 +13,30 @@ Complementa al scraper de grilla (01_scraper_grilla.py). Este script:
      todavía no tienen detalle guardado - no vuelve a visitar los que ya
      procesó ni pierde lo avanzado.
 
-REQUISITOS:
-    pip install playwright pandas playwright-stealth
-    playwright install chromium   (si no lo hiciste ya para el otro scraper)
+RUTA PRINCIPAL: requests (sin navegador)
+    pip install requests beautifulsoup4 lxml pandas
+    Se confirmó con pruebas (6 URLs comparadas 1:1 contra Playwright, y una
+    corrida de volumen de 150 URLs seguidas) que requests devuelve el mismo
+    JSON embebido y el mismo texto de características que Playwright, sin
+    señales de bloqueo ni degradación con volumen sostenido (ver
+    01_obtener_datos/pruebas/). Por eso ya no se necesita un navegador para
+    la ruta normal de este script, lo que evita la dependencia pesada de
+    Playwright en entornos como GitHub Actions.
 
-    playwright-stealth es OPCIONAL pero muy recomendado: reduce varias señales
-    que delatan un navegador automatizado (navigator.webdriver, inconsistencias
-    de WebGL, etc.). Si no lo instalas, el script funciona igual pero con más
-    riesgo de bloqueo.
+RUTA DE RESPALDO: Playwright (NO es la ruta principal)
+    Si en algún momento el sitio empezara a bloquear las requests simples de
+    forma persistente (no observado en las pruebas), o si necesitas resolver
+    un CAPTCHA a mano, existe `main_fallback_playwright()` como red de
+    seguridad. Es un camino aparte, no se ejecuta automáticamente. Para
+    usarlo:
+        pip install playwright playwright-stealth
+        playwright install chromium
+        python 02_scraper_detalle.py --fallback-playwright
+    El import de Playwright es perezoso (ocurre DENTRO de esa función), así
+    que el resto del script - incluida la ruta principal - funciona sin
+    problema en un entorno donde Playwright no está instalado.
 
-CÓMO CORRERLO EN UN SERVIDOR SIN PANTALLA (headless obligatorio):
+CÓMO CORRERLO EN UN SERVIDOR:
 - Este script está pensado para correr en tandas pequeñas vía cron (ver
   LIMITE_POR_CORRIDA más abajo), NO para intentar procesar miles de avisos
   de una sola sentada. Ejemplo de cron para correr cada 2 horas:
@@ -34,10 +49,16 @@ NOTAS IMPORTANTES:
 - Este scraper es más "sensible" que el de grilla: entra a UNA página por
   cada aviso, en vez de una página que lista 48 de una vez. Eso significa
   muchas más visitas en total, por lo que el riesgo de bloqueo es mayor.
-  Los delays por defecto son más largos que en el scraper de grilla.
 - Si el sitio muestra CAPTCHA, el script se DETIENE de inmediato dejando
   guardado todo lo que alcanzó a procesar, y activa un cooldown antes de
   permitir la siguiente corrida.
+- Un 404 (u otro error) aislado puede ser transitorio: cada aviso se
+  reintenta automáticamente (ver REINTENTOS_TRAS_ERROR) antes de darlo por
+  fallido EN ESTA corrida. El manejo de fallos persistentes ENTRE corridas
+  (para no reintentar para siempre un aviso realmente eliminado) vive en
+  05_modelo_produccion/02_scraper_detalle_incremental.py, vía el contador
+  `intentos_fallidos_detalle` - este script original (de exploración inicial,
+  sin ese contador) simplemente deja el aviso pendiente para la próxima vez.
 - Igual que con el otro scraper: revisa el robots.txt / Términos de Uso antes
   de correrlo a gran escala, y no reproduzcas ni redistribuyas contenido con
   derechos de terceros (fotos, descripciones completas de otros) sin permiso.
@@ -49,6 +70,7 @@ NOTAS IMPORTANTES:
 """
 
 import re
+import sys
 import json
 import time
 import random
@@ -59,14 +81,9 @@ from datetime import date, datetime, timedelta
 from math import radians, sin, cos, sqrt, atan2
 from typing import Optional
 
+import requests
 import pandas as pd
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-
-try:
-    from playwright_stealth import Stealth
-    STEALTH_DISPONIBLE = True
-except ImportError:
-    STEALTH_DISPONIBLE = False
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -85,19 +102,32 @@ CARPETA_SCRIPT = Path(__file__).resolve().parent
 # solo LEE la tabla `avisos` y solo ESCRIBE en su propia tabla `avisos_detalle`.
 BD_PRINCIPAL = CARPETA_SCRIPT / "avisos_gran_concepcion.db"
 
-DELAY_MIN = 10.0   # segundos entre cada visita a un aviso individual
-DELAY_MAX = 25.0
+DELAY_MIN = 2.0   # segundos entre cada visita a un aviso individual
+DELAY_MAX = 4.0   # (validado con una corrida de volumen de 150 requests seguidas, sin señales de bloqueo)
 
 LIMITE_POR_CORRIDA = 2000   # avisos a procesar como máximo en UNA ejecución del script
                           # (usa cron para correrlo varias veces al día en vez de subir esto mucho)
 
 COOLDOWN_TRAS_CAPTCHA_MINUTOS = 60   # tiempo mínimo de espera antes de reintentar tras un bloqueo
 
-# MODO MANUAL: si el bloqueo automático persiste incluso con stealth/delays/referer,
-# esta es la alternativa de respaldo. Ponla en True para correr el script en TU
-# computador (con pantalla) en vez del servidor. El navegador se abre visible
-# (headless=False) y, si aparece un CAPTCHA, el script se PAUSA y te espera a
-# que lo resuelvas tú mismo en esa ventana antes de continuar.
+# Reintentos ante un fallo de red/HTTP (ej. 404) al visitar UN aviso, dentro
+# de la MISMA corrida - confirmado que un 404 aislado puede ser transitorio
+# (no reproducible al reintentar segundos después). No confundir con el
+# manejo de fallos PERSISTENTES entre corridas (eso vive en
+# 05_modelo_produccion/02_scraper_detalle_incremental.py).
+REINTENTOS_TRAS_ERROR = 2          # reintentos adicionales tras el primer intento (total = 1 + este valor)
+BACKOFF_REINTENTO_MIN = 3.0        # segundos de espera antes de cada reintento
+BACKOFF_REINTENTO_MAX = 6.0
+
+TIMEOUT_REQUEST_SEG = 15
+
+# MODO MANUAL: si el bloqueo automático persiste incluso con delays/referer,
+# esta es la alternativa de respaldo. Ponla en True para usar
+# main_fallback_playwright() con un navegador visible en TU computador (con
+# pantalla) en vez del servidor. Si aparece un CAPTCHA, el script se PAUSA y
+# te espera a que lo resuelvas tú mismo en esa ventana antes de continuar.
+# La ruta principal (requests) no puede mostrarte una ventana de navegador -
+# este modo solo tiene efecto dentro de main_fallback_playwright().
 MODO_MANUAL_CAPTCHA = False
 
 BASE_URL = "https://www.portalinmobiliario.com"
@@ -108,6 +138,19 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+# Headers para la ruta principal (requests) - mismo criterio que
+# 01_scraper_grilla.py (HEADERS), que ya está validado en producción para
+# este sitio. El Referer se arma aparte por request (ver construir_referer).
+HEADERS_BASE = {
+    "User-Agent": USER_AGENT,
+    "Accept-Language": "es-CL,es;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+}
+
+
+def headers_requests(referer: str) -> dict:
+    return {**HEADERS_BASE, "Referer": referer}
+
 # ------------------------------------------------------------------
 # PATRONES DE EXTRACCIÓN
 # Se aplican sobre el TEXTO COMPLETO de la página (no sobre selectores CSS
@@ -117,7 +160,17 @@ USER_AGENT = (
 RE_FECHA_PUBLICACION = re.compile(r"Publicado hace ([^\n\|]+)", re.IGNORECASE)
 RE_SUPERFICIE_TOTAL = re.compile(r"Superficie total\s*([\d.,]+)\s*m", re.IGNORECASE)
 RE_SUPERFICIE_UTIL = re.compile(r"Superficie útil\s*([\d.,]+)\s*m", re.IGNORECASE)
-RE_DORMITORIOS = re.compile(r"Dormitorios\s*(\d+)", re.IGNORECASE)
+
+# Sin IGNORECASE a propósito: el carrusel de "recomendados" de la página trae
+# tarjetas de OTROS avisos con "N dormitorios" en minúscula (ej. "3
+# dormitorios\n2 baños\n84 m² útiles"), mientras que la sección de
+# características del aviso actual trae "Dormitorios" con mayúscula DESPUÉS
+# del número (ej. "Dormitorios\n3"). Con IGNORECASE, re.search encontraba
+# primero una tarjeta del carrusel y capturaba el número que viene después de
+# "dormitorios" ahí — que es la cantidad de baños de ESE OTRO aviso, no los
+# dormitorios del aviso actual (mismo bug que RE_BANOS, ver más abajo).
+# Matchear solo "Dormitorios" con D mayúscula evita el carrusel por completo.
+RE_DORMITORIOS = re.compile(r"Dormitorios\s*(\d+)")
 
 # Sin IGNORECASE a propósito: la insignia superior de la página trae "N
 # baños" en minúscula ANTES del número (ej. "2 baños\n75 m² totales"),
@@ -348,6 +401,60 @@ def tiempo_restante_cooldown(con: sqlite3.Connection) -> Optional[timedelta]:
     if transcurrido < cooldown_total:
         return cooldown_total - transcurrido
     return None
+
+
+# ------------------------------------------------------------------
+# ADAPTADOR HTML -> interfaz mínima de Playwright Page
+# ------------------------------------------------------------------
+# Todas las funciones de extracción de más abajo (extraer_detalle,
+# extraer_coordenadas, extraer_descripcion, extraer_json_estado_pagina,
+# hay_captcha) fueron escritas originalmente para recibir un `page` de
+# Playwright y llamar `page.content()` / `page.locator(sel).inner_text()`.
+# En vez de reescribir esa lógica de negocio para requests, este adaptador
+# imita el subconjunto mínimo de esa interfaz sobre HTML estático - así las
+# funciones de extracción quedan intactas y funcionan igual con la ruta
+# principal (requests) y con la de respaldo (Playwright real).
+class _LocatorHTMLEstatico:
+    def __init__(self, soup: BeautifulSoup, selector: str):
+        self._soup = soup
+        self._selector = selector
+
+    @property
+    def first(self):
+        return self
+
+    def count(self) -> int:
+        if self._selector == "body":
+            return 1
+        return len(self._soup.select(self._selector))
+
+    def inner_text(self) -> str:
+        if self._selector == "body":
+            nodo = self._soup.body or self._soup
+        else:
+            elementos = self._soup.select(self._selector)
+            if not elementos:
+                return ""
+            nodo = elementos[0]
+        # separador "\n" para aproximar cómo Playwright inner_text() separa
+        # bloques visuales - varios patrones RE_* (ej. RE_FECHA_PUBLICACION)
+        # dependen de que haya un salto de línea real entre secciones.
+        return nodo.get_text("\n", strip=True)
+
+
+class PaginaHTMLEstatico:
+    """Envuelve HTML ya descargado (vía requests) para que se comporte, para
+    los fines de extraer_detalle() y compañía, como un `page` de Playwright."""
+
+    def __init__(self, html: str):
+        self._html = html or ""
+        self._soup = BeautifulSoup(self._html, "lxml")
+
+    def content(self) -> str:
+        return self._html
+
+    def locator(self, selector: str) -> _LocatorHTMLEstatico:
+        return _LocatorHTMLEstatico(self._soup, selector)
 
 
 # ------------------------------------------------------------------
@@ -723,7 +830,73 @@ def construir_referer(comuna: str, tipo_propiedad: str) -> str:
 
 
 # ------------------------------------------------------------------
-# MAIN
+# FETCH - ruta principal (requests)
+# ------------------------------------------------------------------
+
+def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
+    """
+    Punto de entrada de alto nivel de la ruta principal: descarga el HTML del
+    aviso vía requests, detecta CAPTCHA y extrae todos los campos - con
+    reintento automático ante fallos de red/HTTP (ej. un 404 transitorio)
+    antes de darlo por fallido EN ESTA corrida.
+
+    La reutilizan tanto main() (este script) como
+    05_modelo_produccion/02_scraper_detalle_incremental.py (vía `sd.` sobre
+    este módulo), para no duplicar la lógica de fetch+reintento.
+
+    Devuelve un dict con:
+      "resultado": "ok" | "captcha" | "error"
+      "datos": dict de extraer_detalle() + distancias (solo si resultado == "ok")
+      "estado_json": JSON de extraer_json_estado_pagina(), ya parseado (solo si
+          resultado == "ok") - se expone para que un llamador (ej. el scraper
+          incremental de producción, que también necesita estado_publicacion)
+          no tenga que volver a descargar la página para leerlo.
+      "status_http": último código HTTP observado (o None si fue un error de red)
+      "motivo": descripción corta del fallo (solo si resultado != "ok")
+    """
+    referer = construir_referer(comuna, tipo_propiedad)
+    intentos_totales = 1 + REINTENTOS_TRAS_ERROR
+    ultimo_status = None
+    ultimo_motivo = None
+
+    for intento in range(1, intentos_totales + 1):
+        try:
+            resp = requests.get(url, headers=headers_requests(referer), timeout=TIMEOUT_REQUEST_SEG)
+            ultimo_status = resp.status_code
+
+            if resp.status_code != 200:
+                ultimo_motivo = f"status HTTP {resp.status_code}"
+                raise ValueError(ultimo_motivo)
+
+            pagina = PaginaHTMLEstatico(resp.text)
+
+            if hay_captcha(pagina):
+                return {"resultado": "captcha", "status_http": ultimo_status, "motivo": "captcha"}
+
+            datos = extraer_detalle(pagina)
+            distancias = calcular_distancias_centro(datos.get("latitud"), datos.get("longitud"), comuna)
+            datos.update(distancias)
+            estado_json = extraer_json_estado_pagina(pagina)
+            return {
+                "resultado": "ok", "datos": datos, "estado_json": estado_json,
+                "status_http": ultimo_status, "motivo": None,
+            }
+
+        except (requests.RequestException, ValueError) as e:
+            ultimo_motivo = ultimo_motivo or str(e)
+            if intento < intentos_totales:
+                espera = random.uniform(BACKOFF_REINTENTO_MIN, BACKOFF_REINTENTO_MAX)
+                log.warning(f"Intento {intento}/{intentos_totales} falló para {url} ({ultimo_motivo}). "
+                            f"Reintentando en {espera:.1f}s...")
+                time.sleep(espera)
+            else:
+                log.warning(f"Agotados los {intentos_totales} intentos para {url} ({ultimo_motivo}).")
+
+    return {"resultado": "error", "status_http": ultimo_status, "motivo": ultimo_motivo}
+
+
+# ------------------------------------------------------------------
+# MAIN - ruta principal (requests, sin navegador)
 # ------------------------------------------------------------------
 
 def main():
@@ -738,12 +911,9 @@ def main():
             con.close()
             return
     else:
-        log.info("MODO_MANUAL_CAPTCHA activado: navegador visible, cooldown desactivado "
-                 "(se asume que estás supervisando la corrida).")
-
-    if not STEALTH_DISPONIBLE:
-        log.warning("playwright-stealth no está instalado. El scraper funcionará igual, pero con más "
-                    "riesgo de bloqueo. Considera instalarlo: pip install playwright-stealth")
+        log.info("MODO_MANUAL_CAPTCHA activado, pero la ruta principal (requests) no puede mostrarte "
+                 "una ventana de navegador para resolver un CAPTCHA a mano. Si necesitas eso, usa "
+                 "'python 02_scraper_detalle.py --fallback-playwright' en su lugar.")
 
     pendientes = obtener_pendientes(con)
 
@@ -758,11 +928,103 @@ def main():
     procesados = 0
     detenido_por_captcha = False
 
+    for _, fila in pendientes.iterrows():
+        id_aviso = fila["id_aviso"]
+        url = fila["url"]
+
+        log.info(f"Visitando {id_aviso}: {url}")
+
+        resultado = obtener_detalle_aviso(url, fila["comuna"], fila["tipo_propiedad"])
+
+        if resultado["resultado"] == "captcha":
+            log.error(f"CAPTCHA detectado en {url}. Deteniendo la corrida ahora mismo. "
+                      f"Lo ya procesado ({procesados} avisos) queda guardado. "
+                      f"Se activa un cooldown de {COOLDOWN_TRAS_CAPTCHA_MINUTOS} minutos "
+                      f"antes de permitir la siguiente corrida.")
+            registrar_captcha(con)
+            detenido_por_captcha = True
+            break
+
+        if resultado["resultado"] == "error":
+            log.warning(f"No se pudo obtener {id_aviso} tras reintentos ({resultado['motivo']}). "
+                        f"Se salta este aviso (queda pendiente para la próxima corrida).")
+            time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+            continue
+
+        guardar_detalle(con, id_aviso, url, resultado["datos"])
+        procesados += 1
+
+        log.info(f"  -> Guardado ({procesados}/{len(pendientes)})")
+
+        time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+
+    con.close()
+
+    if detenido_por_captcha:
+        log.info(f"Corrida detenida por CAPTCHA. Avisos procesados en esta corrida: {procesados}.")
+    else:
+        log.info(f"Corrida completa. Avisos procesados en esta corrida: {procesados}.")
+
+
+# ------------------------------------------------------------------
+# MAIN - ruta de RESPALDO (Playwright + navegador real)
+# ------------------------------------------------------------------
+# NO es la ruta principal. Solo se ejecuta si se invoca explícitamente (ver
+# `if __name__ == "__main__":` más abajo) - nunca automáticamente desde main()
+# ni al importar este módulo. El import de Playwright es perezoso (ocurre
+# recién al llamar esta función) para que el resto del script funcione sin
+# problema en entornos donde Playwright no está instalado (ej. GitHub Actions).
+def main_fallback_playwright():
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+    except ImportError:
+        raise RuntimeError(
+            "Playwright no está instalado. Instálalo con: "
+            "pip install playwright && playwright install chromium"
+        )
+
+    try:
+        from playwright_stealth import Stealth
+        stealth_disponible = True
+    except ImportError:
+        stealth_disponible = False
+
+    con = inicializar_bd()
+
+    if not MODO_MANUAL_CAPTCHA:
+        restante = tiempo_restante_cooldown(con)
+        if restante:
+            minutos = int(restante.total_seconds() // 60) + 1
+            log.warning(f"En cooldown tras un CAPTCHA reciente. Faltan ~{minutos} minutos. "
+                        f"No se hace nada en esta corrida - vuelve a intentarlo después.")
+            con.close()
+            return
+    else:
+        log.info("MODO_MANUAL_CAPTCHA activado: navegador visible, cooldown desactivado "
+                 "(se asume que estás supervisando la corrida).")
+
+    if not stealth_disponible:
+        log.warning("playwright-stealth no está instalado. El scraper funcionará igual, pero con más "
+                    "riesgo de bloqueo. Considera instalarlo: pip install playwright-stealth")
+
+    pendientes = obtener_pendientes(con)
+
+    log.info(f"[FALLBACK PLAYWRIGHT] {len(pendientes)} avisos a procesar en esta corrida "
+              f"(límite configurado: {LIMITE_POR_CORRIDA}).")
+
+    if pendientes.empty:
+        log.info("No hay avisos pendientes. Nada que hacer.")
+        con.close()
+        return
+
+    procesados = 0
+    detenido_por_captcha = False
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not MODO_MANUAL_CAPTCHA)
         context = browser.new_context(user_agent=USER_AGENT, locale="es-CL")
 
-        if STEALTH_DISPONIBLE:
+        if stealth_disponible:
             Stealth().apply_stealth_sync(context)
 
         page = context.new_page()
@@ -828,4 +1090,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--fallback-playwright" in sys.argv:
+        main_fallback_playwright()
+    else:
+        main()
