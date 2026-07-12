@@ -2,3 +2,7 @@ streamlit==1.58.0
 folium==0.20.0
 streamlit-folium==0.27.2
 pandas
+numpy
+requests
+joblib
+scikit-learn

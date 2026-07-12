@@ -4,16 +4,17 @@ Pipeline completo de datos, desde scraping hasta modelamiento, para estimar el p
 arriendo de **departamentos** en las comunas del Gran Concepción (Chile) y detectar avisos
 que están publicados por debajo o por encima de lo que el mercado local justifica.
 
-El proyecto cubre cinco etapas encadenadas:
+El proyecto cubre seis etapas encadenadas:
 
 1. **Scraping** de avisos de arriendo (Portal Inmobiliario) + cruce con un índice público de
    vulnerabilidad socioterritorial.
 2. **Análisis exploratorio** de los datos crudos.
 3. **Ingeniería y selección de variables**: limpieza, imputación, variables derivadas y
    selección estadística de las features finales.
-4. **Modelamiento**: comparación de XGBoost, LightGBM y Random Forest para predecir
-   `precio_clp`, con **XGBoost como modelo final**, sobre el cual se construye además un
-   sistema de etiquetado "oportunidad / caro / precio de mercado".
+4. **Modelamiento**: comparación de XGBoost y LightGBM para predecir `precio_clp`, cada uno con
+   su propio sistema de etiquetado "oportunidad / caro / precio de mercado" construido sobre su
+   ensamble de bagging. El algoritmo que entrena el modelo de **producción** se decide de forma
+   automática (ver sección 12.1); a la fecha es **LightGBM**.
 5. **Producción** (`05_modelo_produccion/`): pipeline separado, re-ejecutable vía cron, que
    entrena y versiona un modelo de producción, scrapea avisos nuevos de forma incremental,
    y genera predicciones + etiquetas sobre una base de datos propia. Ver sección 12.
@@ -31,6 +32,15 @@ El proyecto cubre cinco etapas encadenadas:
 
 ---
 
+### 🔎 Visualización interactiva
+
+Puedes explorar los resultados del modelo y las predicciones sobre los avisos vigentes mediante
+la aplicación desplegada en Streamlit:
+
+**[gran-concepcion-arriendos-departamentos.streamlit.app](https://gran-concepcion-arriendos-departamentos.streamlit.app)**
+
+---
+
 ## 1. Arquitectura del pipeline
 
 ```
@@ -45,16 +55,18 @@ El proyecto cubre cinco etapas encadenadas:
   01_EDA.ipynb                          → exploración manual de los datos crudos
         ▼
 03_ingenieria_variables/
-  01_ingenieria_variables.py            → datos_ingenieria_variables.csv (1.476 filas × 42 features)
-  02_seleccion_variables.py             → selected_features.csv          (20 features finales)
+  01_ingenieria_variables.py            → datos_ingenieria_variables.csv (1.628 filas × 42 features)
+  02_seleccion_variables.py             → selected_features.csv          (32 features finales)
         ▼
 04_modelamiento/
-  01_xgboost.py        → modelo FINAL (bagging ×10) + etiquetado oportunidad/caro
-  02_lightgbm.py        → modelo de comparación (bagging ×5)
-  03_random_forest.py   → modelo de comparación (bagging ×5)
+  01_xgboost.py          → bagging ×10 + etiquetado oportunidad/caro
+  02_lightgbm.py         → bagging ×10 + etiquetado oportunidad/caro (misma API que 01_xgboost.py)
         ▼
 05_modelo_produccion/   → pipeline de producción, separado e independiente (ver sección 12)
-  entrenamiento/01_entrenar_modelo_produccion.py → modelo versionado (85/15 + calibración)
+  entrenamiento/seleccionar_algoritmo.py         → compara xgboost vs lightgbm (JSON de métricas
+                                                    de investigación) y elige el algoritmo ganador
+  entrenamiento/01_entrenar_modelo_produccion.py → entrena el algoritmo ganador, modelo versionado
+                                                    (85/15 + calibración)
   00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
   01_scraper_grilla_incremental.py               → tabla `avisos`          (produccion_gran_concepcion.db)
   02_scraper_detalle_incremental.py              → tabla `avisos_detalle` + estado_publicacion
@@ -106,9 +118,8 @@ scrapear), corre en orden desde la raíz del repo:
 ```bash
 python 03_ingenieria_variables/01_ingenieria_variables.py
 python 03_ingenieria_variables/02_seleccion_variables.py
-python 04_modelamiento/01_xgboost.py        # modelo final + etiquetado
-python 04_modelamiento/02_lightgbm.py       # comparación
-python 04_modelamiento/03_random_forest.py  # comparación
+python 04_modelamiento/01_xgboost.py   # entrenamiento + etiquetado oportunidad/caro
+python 04_modelamiento/02_lightgbm.py  # entrenamiento + etiquetado oportunidad/caro
 ```
 
 ### 2.3. Camino completo — scraping desde cero
@@ -170,7 +181,7 @@ un radio de 300 metros (excluyendo la fila propia), con:
   explícitamente en la columna `tiene_comparables_cercanos` para distinguir ese caso de un
   vecindario real con valor bajo.
 
-Esta variable corregida (`precio_m2_sector_departamento`) sí es una de las 20 features
+Esta variable corregida (`precio_m2_sector_departamento`) sí es una de las 32 features
 finales del modelo — la diferencia crítica es que su fuente son los vecinos, nunca la propia
 fila.
 
@@ -290,14 +301,16 @@ fila.
 
 ---
 
-## 4. Features del modelo final (20)
+## 4. Features del modelo final (32)
 
 Seleccionadas por `03_ingenieria_variables/02_seleccion_variables.py` a partir de 42 features
-candidatas (ver sección 6 para la metodología de selección).
+candidatas (ver sección 6 para la metodología de selección). Mismas 32 features para XGBoost y
+LightGBM (ambos se comparan sobre exactamente el mismo set, ver sección 7).
 
 **Características físicas de la propiedad**
 - `superficie_util_m2`, `superficie_total_m2`, `ratio_total_util`
-- `banos`, `estacionamientos`, `piso_unidad`, `ascensor`, `piscina`, `amoblado`
+- `banos`, `estacionamientos`, `estacionamiento_visitas`, `bodegas`, `piso_unidad`, `ascensor`,
+  `piscina`, `amoblado`, `conserjeria`, `condominio_cerrado`
 - `antiguedad_anos`
 
 **Costos asociados**
@@ -306,17 +319,18 @@ candidatas (ver sección 6 para la metodología de selección).
 **Ubicación y mercado local**
 - `precio_m2_sector_departamento` (comparables cercanos, ver sección 3.1)
 - `tiene_comparables_cercanos` (flag de confiabilidad del anterior)
+- `nivel_barrio` (precio/m² suavizado por barrio, ver sección 3.4)
 - `distancia_centro_concepcion_m`, `distancia_centro_comuna_m`
-- `cantidad_paraderos`, `cantidad_colegios`
+- `cantidad_paraderos`, `cantidad_colegios`, `cantidad_supermercados`,
+  `cantidad_jardines_infantiles`, `cantidad_centros_comerciales`, `cantidad_plazas`,
+  `cantidad_farmacias`, `cantidad_clinicas`
 
 **Contexto socioeconómico del sector (índice IGVUST / Registro Social de Hogares, por
 Unidad Vecinal)**
 - `rank_nac` (ranking nacional de vulnerabilidad de la Unidad Vecinal)
 - `pob_rsh_uv` (población registrada en el RSH de la Unidad Vecinal)
 - `p_urbano` (porcentaje urbano de la Unidad Vecinal)
-
-`nivel_barrio` no quedó entre las 20 finales (fue descartada en la selección por estabilidad),
-pese a ser una variable derivada relevante en la etapa de ingeniería.
+- `c_ig_com` (índice de vulnerabilidad comunal IGVUST)
 
 ---
 
@@ -324,11 +338,11 @@ pese a ser una variable derivada relevante en la etapa de ingeniería.
 
 El proyecto pasó por dos grandes etapas de modelamiento:
 
-**Etapa inicial** — Random Forest como modelo base, evaluado con MAE/RMSE/R²/MAPE y la razón
-RMSE/MAE como diagnóstico de concentración de error en casos extremos (mejoró de ~2.7 a ~2.1
-tras la limpieza de datos). En esta etapa también se probó `log(precio_clp)` como target y se
-descartó por no aportar mejora, y se revisaron manualmente (URL por URL) los casos de error
-más extremo para descartar errores de datos frente a variabilidad genuina de mercado.
+**Etapa inicial** — modelo base de árboles, evaluado con MAE/RMSE/R²/MAPE y la razón RMSE/MAE
+como diagnóstico de concentración de error en casos extremos (mejoró de ~2.7 a ~2.1 tras la
+limpieza de datos). En esta etapa también se probó `log(precio_clp)` como target y se descartó
+por no aportar mejora, y se revisaron manualmente (URL por URL) los casos de error más extremo
+para descartar errores de datos frente a variabilidad genuina de mercado.
 
 **Etapa de refinamiento** (la que definió la versión final, implementada en los scripts
 actuales de `04_modelamiento/`):
@@ -349,12 +363,14 @@ actuales de `04_modelamiento/`):
 - Se **volvió a probar `target_transform='log'`** en esta etapa, con el pipeline ya mejorado,
   y se descartó otra vez por empeorar todas las métricas, incluida la kurtosis de los
   residuos — confirmando con metodología más rigurosa la misma conclusión de la etapa inicial.
-- **Comparación de tres arquitecturas** (XGBoost, LightGBM, Random Forest) sobre las mismas 20
-  features, mismo split y misma seed (ver sección 7).
+- **Comparación de dos arquitecturas** (XGBoost, LightGBM) sobre las mismas 32 features, mismo
+  split y misma seed (ver sección 7). Random Forest se probó en una etapa anterior del proyecto
+  (con menos features y datos sin corregir) y quedó consistentemente por debajo de las otras
+  dos arquitecturas, por lo que se eliminó del pipeline de modelamiento para simplificarlo — el
+  código actual de `04_modelamiento/` solo compara XGBoost y LightGBM.
 - Se **descartó separar el modelo en "premium vs. resto"**: el MAPE del quintil más caro (Q5)
-  no es dramáticamente peor que el resto — los datos de test lo confirman (Q5 MAPE=11.77% vs.
-  Q1 MAPE=11.96%, ver sección 7) — por lo que el problema real es volumen de datos en ese
-  segmento, no una estructura de precios distinta.
+  no es dramáticamente peor que el resto de los quintiles — ver sección 7 — por lo que el
+  problema real es volumen de datos en ese segmento, no una estructura de precios distinta.
 
 > **Nota sobre variables derivadas adicionales**: `03_ingenieria_variables/01_ingenieria_variables.py`
 > incluye una función `crear_variables_derivadas` (ratios por dormitorio, índice de amenities,
@@ -372,12 +388,12 @@ consistente con que la conclusión fue descartarlo.
 
 ## 6. Selección de variables (metodología)
 
-`03_ingenieria_variables/02_seleccion_variables.py` reduce 42 features candidatas a las 20
+`03_ingenieria_variables/02_seleccion_variables.py` reduce 42 features candidatas a las 32
 finales en 4 pasos:
 
 1. **Eliminación de constantes**: features con varianza ≈ 0 sobre train. En la corrida
    registrada, se eliminó `quincho` (varianza cero: prácticamente ningún departamento
-   reportaba esa amenity).
+   reportaba esa amenity) — quedan 41 candidatas.
 2. **Selección por estabilidad**: se entrenan 30 modelos XGBoost con K-Fold aleatorio (5
    folds, semillas distintas), midiendo importancia SHAP (TreeSHAP nativo) de cada feature en
    cada fold. `stability_score = (1 / (1 + CV)) × presence_pct`, donde CV es el coeficiente de
@@ -386,74 +402,78 @@ finales en 4 pasos:
 3. **Selección de k óptimo vía MAE de validación**: se evalúa la curva MAE/RMSE/R² en el set
    de validación para k features (ordenadas por `stability_score`), promediando sobre 5
    semillas, y se aplica la **regla de 1 error estándar** (el k más chico cuyo MAE promedio
-   cae dentro de 1 SE del mínimo) — resultado: **k=20**.
+   cae dentro de 1 SE del mínimo) — resultado: **k=33**.
 4. **Red de seguridad de correlación**: elimina pares de features con correlación > 0.95 entre
-   las ya seleccionadas, quedándose con la de mayor `stability_score`. En la corrida
-   registrada no eliminó ninguna (0 de 20).
+   las ya seleccionadas, quedándose con la de mayor `stability_score`. En la corrida registrada
+   eliminó `hog_uv` (1 de 33), dejando las **32 features finales**.
 
 ---
 
-## 7. Modelos comparados y modelo final
+## 7. Modelos comparados y selección de algoritmo
 
-Los tres modelos comparten exactamente las mismas 20 features, el mismo split estratificado
-(seed=42; 1.032 train / 222 val / 222 test) y el mismo esquema de optimización (Optuna, 50
+Los dos modelos comparten exactamente las mismas 32 features, el mismo split estratificado
+(seed=42; 1.138 train / 245 val / 245 test) y el mismo esquema de optimización (Optuna, 50
 trials, KFold=5, CV solo sobre train) — la única diferencia estructural es el algoritmo y su
 objective/criterion fijo.
 
-| Métrica (Test, n=222)      | **XGBoost (final)** | LightGBM      | Random Forest |
-|-----------------------------|:--------------------:|:-------------:|:-------------:|
-| MAE                         | 54.132               | **53.388**    | 57.445        |
-| RMSE                        | **80.644**           | 83.079        | 92.556        |
-| R²                          | **0.8319**           | 0.8216        | 0.7786        |
-| MAPE                        | 9.44%                | **9.28%**     | 9.87%         |
-| MdAPE                       | 6.72%                | **6.87%** ⁽¹⁾ | 7.82%         |
-| Skewness de residuos        | **1.02**              | 1.46          | 1.75          |
-| Kurtosis de residuos        | **5.25**              | 8.41          | 11.11         |
-| Bagging (nº modelos)        | 10                    | 5             | 5             |
-
-⁽¹⁾ MdAPE de XGBoost (6.72%) es levemente mejor que LightGBM (6.87%); la negrita en esa fila
-marca el valor más bajo salvo por ese caso, donde XGBoost gana.
+| Métrica (Test, n=245)      | XGBoost      | **LightGBM**  |
+|-----------------------------|:------------:|:-------------:|
+| MAE                         | 49.237       | **48.901**    |
+| RMSE                        | 74.455       | **73.890**    |
+| R²                          | 0.8391       | **0.8416**    |
+| MAPE                        | 8.65%        | **8.57%**     |
+| MdAPE                       | 6.50%        | **6.16%**     |
+| Skewness de residuos        | -0.83        | **-0.60**     |
+| Kurtosis de residuos        | 9.79         | **8.68**      |
+| Bagging (nº modelos)        | 10           | 10            |
 
 **Objective/criterion fijo por modelo**: XGBoost `reg:squarederror`, LightGBM `regression`
-(L2), Random Forest `squared_error` — en los tres casos, fijado manualmente en vez de dejarlo
-como hiperparámetro de Optuna (ver sección 5).
+(L2) — fijado manualmente en vez de dejarlo como hiperparámetro de Optuna (ver sección 5).
 
-**Baselines de comparación (Test)**: predecir siempre la media de train → MAE=130.177;
+**Baselines de comparación (Test)**: predecir siempre la media de train → MAE=125.949;
 precio de mercado ingenuo (`precio_m2_sector_departamento × superficie_util_m2`) →
-MAE=86.280. Los tres modelos superan ampliamente ambos baselines.
+MAE=79.200. Ambos modelos superan ampliamente los dos baselines.
 
-**MAE/MAPE por quintil de precio real (XGBoost, Test)**:
+**MAE/MAPE por quintil de precio real (Test)**:
 
-| Quintil | Rango (CLP)         | MAE     | MAPE   |
-|---------|----------------------|---------|--------|
-| Q1      | 250.000 – 430.000    | 45.010  | 11.96% |
-| Q2      | 440.000 – 500.000    | 41.996  | 8.76%  |
-| Q3      | 520.000 – 566.186    | 37.861  | 7.00%  |
-| Q4      | 570.000 – 650.000    | 45.711  | 7.34%  |
-| Q5      | 660.000 – 1.850.000  | 104.415 | 11.77% |
+| Quintil | Rango (CLP)         | MAE XGBoost | MAPE XGBoost | MAE LightGBM | MAPE LightGBM |
+|---------|----------------------|:-----------:|:------------:|:------------:|:--------------:|
+| Q1      | 250.000 – 430.000    | 35.624      | 9.62%        | **34.910**   | **9.46%**      |
+| Q2      | 435.000 – 500.000    | 36.145      | 7.51%        | **35.384**   | **7.35%**      |
+| Q3      | 520.000 – 565.000    | 37.525      | 6.97%        | **38.680**   | 7.19%          |
+| Q4      | 570.000 – 650.000    | 53.789      | 8.74%        | **52.252**   | **8.49%**      |
+| Q5      | 670.000 – 1.850.000  | **86.934**  | **10.21%**   | 87.909       | 10.30%         |
 
-El quintil más caro (Q5) concentra la mayor parte del error **absoluto** (MAE), pero su error
-**relativo** (MAPE) no es peor que el del quintil más barato — de ahí la decisión documentada
-en la sección 5 de no separar el modelo en "premium vs. resto".
+El quintil más caro (Q5) concentra la mayor parte del error **absoluto** (MAE) en ambos
+modelos, pero su error **relativo** (MAPE) no es peor que el de los quintiles más baratos — de
+ahí la decisión documentada en la sección 5 de no separar el modelo en "premium vs. resto".
+Nótese que XGBoost es levemente mejor que LightGBM justo en Q5 (el segmento más caro), aunque
+pierda en todas las demás métricas globales — un patrón que `seleccionar_algoritmo.py` detecta
+y reporta como advertencia (ver sección 12.1), sin que cambie la decisión final.
 
-### Modelo final: XGBoost
+### Selección de algoritmo para producción
 
-Se eligió **XGBoost** por el mejor balance de métricas (mejor R² y RMSE) y, sobre todo, por
-tener la **menor asimetría y kurtosis de residuos** de los tres — es decir, comete menos
-errores extremos y su distribución de error es más estable — aunque LightGBM queda muy cerca
-en MAE/MAPE. Random Forest quedó claramente por debajo en todas las métricas.
+A diferencia de etapas anteriores del proyecto (con Random Forest como tercera opción, ver
+sección 5), el pipeline actual **no fija editorialmente un "modelo final" único** en
+investigación: los dos scripts de `04_modelamiento/` se entrenan y evalúan en paralelo sobre
+las mismas 32 features, y `05_modelo_produccion/entrenamiento/seleccionar_algoritmo.py` decide
+de forma automática cuál entrena el modelo de **producción**, comparando los JSON de métricas
+de test más recientes con un criterio ponderado (50% MAE + 50% RMSE, normalizado). Con la
+corrida vigente, el ganador es **LightGBM**, por un margen relativo de apenas **0.72%** — ver
+sección 12.1 para el detalle del mecanismo.
 
-El modelo final se entrena como un **ensamble de bagging de 10 modelos** (mismos
-hiperparámetros de Optuna, 10 semillas distintas; LightGBM y Random Forest usan 5 semillas
-cada uno) y las predicciones finales son el promedio del ensamble — esto es, además, la base
-del sistema de etiquetado de la sección 8.
+Cada modelo se entrena como un **ensamble de bagging de 10 modelos** (mismos hiperparámetros
+de Optuna, 10 semillas distintas) y las predicciones finales son el promedio del ensamble —
+esto es, además, la base del sistema de etiquetado de la sección 8.
 
 ---
 
 ## 8. Sistema de etiquetado "oportunidad / caro"
 
-Implementado exclusivamente en `04_modelamiento/01_xgboost.py`, sobre el ensamble de bagging
-de XGBoost (los 10 modelos, no un modelo único) y solo para el set de test.
+Implementado en ambos scripts de `04_modelamiento/` (`01_xgboost.py` y `02_lightgbm.py`, misma
+lógica en los dos), sobre el ensamble de bagging propio de cada uno (los 10 modelos, no un
+modelo único) y solo para el set de test. Los números de esta sección corresponden a
+**LightGBM** (el algoritmo vigente en producción, ver sección 7).
 
 **Lógica**:
 
@@ -462,7 +482,7 @@ de XGBoost (los 10 modelos, no un modelo único) y solo para el set de test.
 2. Ese error se normaliza de forma robusta **dentro de su propio decil de `precio_clp` real**
    (no del precio predicho): `z_robusto = (error − mediana_error_decil) / (MAD_error_decil ×
    1.4826)`. Se usa mediana/MAD en vez de media/desviación estándar porque cada decil tiene
-   pocas filas en test (~20-30) y la mediana/MAD es menos sensible a outliers.
+   pocas filas en test (~24-30) y la mediana/MAD es menos sensible a outliers.
 3. Etiqueta según umbral (`±1.0` en `z_robusto`):
    - **`oportunidad`**: precio real muy por debajo de lo esperado para su decil (z < −1.0).
    - **`caro`**: precio real muy por encima de lo esperado (z > 1.0).
@@ -472,22 +492,24 @@ de XGBoost (los 10 modelos, no un modelo único) y solo para el set de test.
    entre sí, la etiqueta es menos confiable aunque el z_robusto sea grande. Se reporta en 3
    niveles (alta / media / baja confianza) según terciles del CV sobre el propio set de test.
 
-**Distribución resultante (Test, n=222)**:
+**Distribución resultante (LightGBM, Test, n=245)**:
 
 | Etiqueta            | Total | Alta confianza | Confianza media | Baja confianza |
 |----------------------|:-----:|:---------------:|:-----------------:|:-----------------:|
-| `precio_de_mercado`  | 145 (65,3%) | 52 | 52 | 41 |
-| `oportunidad`        | 44 (19,8%)  | 6  | 14 | 24 |
-| `caro`               | 33 (14,9%)  | 16 | 8  | 9  |
+| `precio_de_mercado`  | 168 (68,6%) | 68 | 59 | 41 |
+| `oportunidad`        | 47 (19,2%)  | 7  | 15 | 25 |
+| `caro`               | 30 (12,2%)  | 7  | 7  | 16 |
 
-Nótese que las etiquetas `oportunidad` concentran proporcionalmente más casos de **baja**
-confianza (24 de 44) que `caro` (9 de 33) — es decir, el modelo es menos consistente
-identificando gangas que sobreprecios en este dataset.
+Nótese que tanto `oportunidad` como `caro` concentran proporcionalmente la misma fracción de
+casos de **baja** confianza (25 de 47 ≈ 53% vs. 16 de 30 ≈ 53%) — a diferencia de corridas
+anteriores del proyecto, en esta el modelo es igual de consistente identificando gangas que
+sobreprecios.
 
-Los resultados se exportan a `04_modelamiento/save/model/`:
-- `xgboost_regression_precio_oportunidades_test.csv` (detalle fila por fila)
-- `xgboost_regression_precio_oportunidades_resumen_decil.csv` (conteo por decil de precio)
-- `xgboost_regression_precio_oportunidades_resumen_etiqueta_confianza.csv` (tabla de arriba)
+Los resultados se exportan a `04_modelamiento/save/model/` con un prefijo por algoritmo
+(`xgboost_regression_precio_*` y `lightgbm_regression_precio_*`, cada script genera el suyo):
+- `..._oportunidades_test.csv` (detalle fila por fila)
+- `..._oportunidades_resumen_decil.csv` (conteo por decil de precio)
+- `..._oportunidades_resumen_etiqueta_confianza.csv` (tabla de arriba)
 
 ---
 
@@ -512,7 +534,8 @@ gran-concepcion-rentals/
 │       ├── ingeniaria_variables/
 │       │   ├── datos_ingenieria_variables.csv
 │       │   ├── niveles_barrio.json
-│       │   └── modelos_superficie/*.pkl   # RandomForest de imputación de superficie
+│       │   └── modelos_superficie/*.pkl   # RandomForest de IMPUTACIÓN de superficie (no es el
+│       │                                  # modelo de precio, ver sección 3.3)
 │       └── seleccion_variables/
 │           ├── selected_features.csv
 │           └── seleccion_variables_reporte.json
@@ -520,15 +543,13 @@ gran-concepcion-rentals/
 ├── 04_modelamiento/
 │   ├── 01_xgboost.py
 │   ├── 02_lightgbm.py
-│   ├── 03_random_forest.py
 │   └── save/model/
 │       ├── xgboost_regression_precio.pkl               # ensamble de 10 modelos
 │       ├── xgboost_regression_precio_metrics.json
 │       ├── xgboost_regression_precio_oportunidades_*.csv
 │       ├── lightgbm_regression_precio.pkl
 │       ├── lightgbm_regression_precio_metrics.json
-│       ├── random_forest_regression_precio.pkl
-│       └── random_forest_regression_precio_metrics.json
+│       └── lightgbm_regression_precio_oportunidades_*.csv
 │
 ├── 05_modelo_produccion/          # pipeline de producción, ver sección 12
 │   ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
@@ -541,7 +562,9 @@ gran-concepcion-rentals/
 │   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
 │   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
 │   └── entrenamiento/
-│       ├── 01_entrenar_modelo_produccion.py
+│       ├── seleccionar_algoritmo.py             # compara xgboost vs lightgbm, elige ganador
+│       ├── algoritmo_seleccionado.json          # decisión persistida (algoritmo + métricas)
+│       ├── 01_entrenar_modelo_produccion.py     # entrena el algoritmo ganador
 │       ├── version_modelo.json                  # contador + historial de versiones
 │       └── versiones/{version}/
 │           ├── modelo_produccion.pkl
@@ -562,8 +585,9 @@ gran-concepcion-rentals/
 
 ## 10. Dependencias
 
-El repo no incluye un `requirements.txt`; estas son las dependencias reales, inferidas de los
-`import` de cada etapa (probado con Python 3.11):
+El repo no incluye un `requirements.txt` en la raíz (sí uno propio en `06_visualizacion/`, ver
+sección 14.5); estas son las dependencias reales de las demás etapas, inferidas de los
+`import` de cada una (probado con Python 3.11):
 
 | Etapa                          | Librerías                                                        |
 |----------------------------------|-------------------------------------------------------------------|
@@ -573,6 +597,7 @@ El repo no incluye un `requirements.txt`; estas son las dependencias reales, inf
 | Ingeniería de variables           | `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn`            |
 | Selección de variables            | `pandas`, `numpy`, `xgboost`, `optuna`, `scikit-learn`             |
 | Modelamiento                      | `pandas`, `numpy`, `xgboost`, `lightgbm`, `optuna`, `scikit-learn`, `scipy` |
+| Visualización (`06_visualizacion/`) | `streamlit`, `folium`, `streamlit-folium`, `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn` — las últimas cuatro porque `data.py` importa dinámicamente `03_ingenieria_variables/01_ingenieria_variables.py` (ver sección 14.2) |
 
 Instalación sugerida (sin versiones pineadas, ya que no existen en el repo):
 
@@ -597,7 +622,7 @@ playwright install chromium
 - No existen en el dataset variables de calidad, vista, terminaciones o estado de conservación
   real de la propiedad — el modelo infiere precio a partir de estructura, ubicación y contexto
   socioeconómico del sector, pero no "ve" fotos ni descripciones cualitativas.
-- El dataset es de corte transversal y relativamente chico (1.476 filas tras limpieza); la
+- El dataset es de corte transversal y relativamente chico (1.628 filas tras limpieza); la
   validación multi-semilla existe para cuantificar esta sensibilidad al split, pero no se
   ejecuta por defecto en cada corrida por su costo computacional.
 - Las variables derivadas adicionales (`crear_variables_derivadas`) están implementadas pero
@@ -627,19 +652,35 @@ base de datos** (`produccion_gran_concepcion.db`), nunca escribe en `avisos_gran
 (la trata como fuente de solo lectura), y está pensado para correr sin intervención manual vía
 cron, agregando avisos nuevos y sus predicciones día a día.
 
-### 12.1. Parte 1 — Entrenamiento y versionado (`entrenamiento/01_entrenar_modelo_produccion.py`)
+### 12.1. Parte 1 — Selección de algoritmo y entrenamiento
 
-- Reutiliza `04_modelamiento/01_xgboost.py` (cargado vía `importlib`, ya que su nombre empieza
-  con dígito) — no duplica la lógica de optimización de hiperparámetros, bagging ni SHAP.
+**`entrenamiento/seleccionar_algoritmo.py`** — no reentrena nada: lee los JSON de métricas de
+test más recientes de `04_modelamiento/01_xgboost.py` y `02_lightgbm.py`, valida que sean
+comparables (mismas features, misma seed, mismo tamaño de test — si no, lanza error en vez de
+comparar corridas desalineadas), y elige un ganador según un criterio configurable (`ponderado`
+por defecto: 50% MAE test + 50% RMSE test, cada métrica normalizada por su propio promedio
+entre los dos algoritmos antes de ponderar). También reporta una advertencia si el ganador
+global no es el mejor en el quintil más caro (Q5, ver sección 7). La decisión queda persistida
+en `algoritmo_seleccionado.json`.
+
+**`entrenamiento/01_entrenar_modelo_produccion.py`** — carga como módulo (vía `importlib`, ya
+que su nombre empieza con dígito) el script de investigación del algoritmo **ganador**
+(`04_modelamiento/01_xgboost.py` o `02_lightgbm.py`, según `algoritmo_seleccionado.json`) y
+reutiliza sus funciones (optimización de hiperparámetros, bagging, evaluación, SHAP); solo se
+entrena el algoritmo elegido, no ambos. Los dos scripts de investigación exponen la misma API
+(mismos nombres de función/constante), así que este script es agnóstico a cuál de los dos se
+cargó.
 - **Split 85/15** (train/test) en vez de 70/15/15: el ensamble de bagging igual necesita un set
   para early stopping, así que se separa internamente un 10% del 85% de train solo para eso
   (~76.5% train_fit / ~8.5% early-stopping / 15% test) — un detalle interno de entrenamiento,
   no una tercera partición pública.
-- **Versionado**: cada corrida genera un identificador `v{contador:04d}_{timestamp}_{hash8}`
-  (contador incremental + hash sha256 de los hiperparámetros ganadores), registrado en
-  `version_modelo.json` (contador + historial). El modelo y sus parámetros se **archivan por
-  versión** en `versiones/{version}/` (no se sobrescriben) — así se puede recuperar el modelo
-  exacto usado en cualquier predicción pasada.
+- **Versionado**: cada corrida genera un identificador
+  `v{contador:04d}_{timestamp}_{algoritmo}_{hash8}` (contador incremental + algoritmo + hash
+  sha256 de algoritmo+hiperparámetros ganadores), registrado en `version_modelo.json` (contador
+  + historial). El algoritmo queda explícito en el propio identificador de versión, para poder
+  distinguir de un vistazo qué algoritmo generó cada predicción histórica. El modelo y sus
+  parámetros se **archivan por versión** en `versiones/{version}/` (no se sobrescriben) — así
+  se puede recuperar el modelo exacto usado en cualquier predicción pasada.
 - **Calibración de oportunidad/confianza**: además de las métricas de evaluación estándar,
   calcula y persiste (sobre el set de test) los bordes de deciles de precio, la mediana/MAD del
   error por decil, y los terciles del coeficiente de variación del ensamble — todo guardado en
@@ -647,6 +688,7 @@ cron, agregando avisos nuevos y sus predicciones día a día.
   nuevos en la Parte 2 sin recalcular una distribución con una sola fila (imposible con qcut).
 - Dataset de entrada: por ahora, el mismo CSV curado que usa el modelo de investigación
   (`datos_ingenieria_variables.csv` + `selected_features.csv`).
+- Versión vigente a la fecha: `v0005_20260712085625_lightgbm_03cb22af`.
 
 ### 12.2. Parte 2 — Pipeline incremental
 
@@ -828,14 +870,10 @@ Métricas de test, antes/después de la corrección:
 
 Ambos algoritmos mejoraron en las cinco métricas de test. `seleccionar_algoritmo.py` (criterio
 ponderado 50% MAE + 50% RMSE test) sigue eligiendo **LightGBM** como antes, pero el margen se
-achicó de 3.03% a 0.72% relativo — XGBoost cerró bastante la brecha con datos corregidos.
-
-> Esta corrida de investigación (LightGBM, 32 features) es distinta de la comparación
-> XGBoost/LightGBM/Random Forest documentada en las secciones 5-7 (que describen una corrida
-> anterior, con 20 features y datos sin corregir, y donde XGBoost fue elegido editorialmente por
-> menor asimetría/kurtosis de residuos). `seleccionar_algoritmo.py` es un mecanismo aparte,
-> específico para decidir qué algoritmo entrena el modelo de **producción** — no reemplaza esa
-> decisión editorial de investigación, que no se ha revisitado con los datos corregidos.
+achicó de 3.03% a 0.72% relativo — XGBoost cerró bastante la brecha con datos corregidos. Las
+secciones 5-7 ya reflejan este estado corregido (32 features, LightGBM vigente en producción);
+esta subsección documenta el delta puntual frente a la corrida anterior, no una comparación
+aparte.
 
 ### 13.5. Producción: pipeline extendido para 3 features nuevas + reentrenamiento
 
@@ -977,10 +1015,16 @@ navegación de por medio.
 ### 14.5. Cómo correrlo
 
 ```bash
-pip install streamlit folium streamlit-folium pandas
+pip install -r 06_visualizacion/requirements.txt
 cd 06_visualizacion
 streamlit run app.py
 ```
+
+`requirements.txt` incluye, además de `streamlit`/`folium`/`streamlit-folium`/`pandas`,
+`numpy`/`requests`/`joblib`/`scikit-learn`: son transitivas de `03_ingenieria_variables/01_ingenieria_variables.py`,
+que `data.py` importa dinámicamente (ver 14.2) — sin ellas el deploy falla con
+`ModuleNotFoundError` al cargar ese módulo (Streamlit Cloud solo instala lo declarado en este
+`requirements.txt`, no las dependencias de las demás etapas del pipeline).
 
 Requiere que `05_modelo_produccion/produccion_gran_concepcion.db` ya exista con al menos un
 aviso en `predicciones` (ver sección 12) — si la base está vacía o el orquestador todavía no
