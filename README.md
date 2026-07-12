@@ -416,23 +416,28 @@ Los dos modelos comparten exactamente las mismas 32 features, el mismo split est
 trials, KFold=5, CV solo sobre train) — la única diferencia estructural es el algoritmo y su
 objective/criterion fijo.
 
-| Métrica (Test, n=245)      | XGBoost      | **LightGBM**  |
-|-----------------------------|:------------:|:-------------:|
-| MAE                         | 49.237       | **48.901**    |
-| RMSE                        | 74.455       | **73.890**    |
-| R²                          | 0.8391       | **0.8416**    |
-| MAPE                        | 8.65%        | **8.57%**     |
-| MdAPE                       | 6.50%        | **6.16%**     |
-| Skewness de residuos        | -0.83        | **-0.60**     |
-| Kurtosis de residuos        | 9.79         | **8.68**      |
-| Bagging (nº modelos)        | 10           | 10            |
+Se incluyen además dos baselines *naive* (sin aprendizaje, solo aritmética simple) como piso de
+comparación: predecir siempre la media de `precio_clp` de train, y un "precio de mercado
+ingenuo" (`precio_m2_sector_departamento × superficie_util_m2`, sin ajuste ninguno). Estos
+baselines solo reportan MAE (no se les calculan el resto de las métricas, al no ser modelos
+entrenados) — el resto de las celdas queda como "—".
+
+| Métrica (Test, n=245)         | Media de train (naive) | Precio × m² ingenuo (naive) | XGBoost | **LightGBM** |
+|--------------------------------|:-----------------------:|:-----------------------------:|:-------:|:------------:|
+| MAE                             | 125.949                 | 79.200                        | 49.237  | **48.901**   |
+| RMSE                            | —                        | —                              | 74.455  | **73.890**   |
+| R²                              | —                        | —                              | 0.8391  | **0.8416**   |
+| MAPE                            | —                        | —                              | 8.65%   | **8.57%**    |
+| MdAPE                           | —                        | —                              | 6.50%   | **6.16%**    |
+| Skewness de residuos            | —                        | —                              | -0.83   | **-0.60**    |
+| Kurtosis de residuos            | —                        | —                              | 9.79    | **8.68**     |
+| Bagging (nº modelos)            | —                        | —                              | 10      | 10           |
+
+Ambos modelos superan ampliamente los dos baselines: LightGBM reduce el MAE en **61%** frente
+al baseline de media de train y en **38%** frente al de precio/m² ingenuo.
 
 **Objective/criterion fijo por modelo**: XGBoost `reg:squarederror`, LightGBM `regression`
 (L2) — fijado manualmente en vez de dejarlo como hiperparámetro de Optuna (ver sección 5).
-
-**Baselines de comparación (Test)**: predecir siempre la media de train → MAE=125.949;
-precio de mercado ingenuo (`precio_m2_sector_departamento × superficie_util_m2`) →
-MAE=79.200. Ambos modelos superan ampliamente los dos baselines.
 
 **MAE/MAPE por quintil de precio real (Test)**:
 

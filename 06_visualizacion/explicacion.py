@@ -2,6 +2,83 @@
 
 import streamlit as st
 
+from styles import COLOR_TEXT_TITLE
+
+# Las 32 features que usa el modelo vigente (ver 03_ingenieria_variables/save/seleccion_variables/
+# selected_features.csv y sección 4 del README), agrupadas igual que ahí, con una explicación en
+# lenguaje simple de qué mide cada una. Contenido estático (no se lee en vivo), igual que el resto
+# de las cifras de este archivo.
+_FEATURE_GROUPS = [
+    (
+        "Características físicas del departamento",
+        [
+            ("Superficie útil", "El espacio interior habitable del departamento, en m²."),
+            ("Superficie total", "Superficie útil más terrazas, bodega y otras áreas no habitables, en m²."),
+            ("Relación superficie total/útil", "Qué tanta superficie \"extra\" (no habitable) tiene el departamento respecto a la habitable."),
+            ("Número de baños", "Cantidad de baños del departamento."),
+            ("Número de estacionamientos", "Cantidad de estacionamientos incluidos con el departamento."),
+            ("Estacionamientos de visita", "Si el edificio cuenta con estacionamientos para visitas."),
+            ("Bodega", "Si el departamento incluye bodega."),
+            ("Piso", "En qué piso del edificio está ubicado."),
+            ("Ascensor", "Si el edificio tiene ascensor."),
+            ("Piscina", "Si el edificio o condominio tiene piscina."),
+            ("Amoblado", "Si el departamento se arrienda amoblado."),
+            ("Conserjería", "Si el edificio cuenta con conserjería."),
+            ("Condominio cerrado", "Si el edificio pertenece a un condominio con acceso controlado."),
+            ("Antigüedad del edificio", "Años transcurridos desde la construcción del edificio."),
+        ],
+    ),
+    (
+        "Costos asociados",
+        [
+            ("Gastos comunes", "Monto mensual de gastos comunes informado en el aviso."),
+        ],
+    ),
+    (
+        "Ubicación y mercado local",
+        [
+            ("Precio/m² de comparables cercanos", "Precio promedio por m² de otros departamentos similares dentro de 300 metros — nunca del propio aviso, para no sesgar la comparación."),
+            ("Confiabilidad de ese precio comparable", "Si hubo suficientes departamentos cercanos para calcular el precio/m² anterior de forma confiable."),
+            ("Nivel de precio del barrio", "Qué tan caro es el barrio en relación al resto de la ciudad, en 5 niveles."),
+            ("Distancia al centro de Concepción", "Distancia en línea recta al centro de la ciudad."),
+            ("Distancia al centro de la comuna", "Distancia en línea recta al centro de la propia comuna del departamento."),
+            ("Paraderos cercanos", "Cantidad de paraderos de locomoción colectiva a menos de 500 metros."),
+            ("Colegios cercanos", "Cantidad de colegios a menos de 500 metros."),
+            ("Supermercados cercanos", "Cantidad de supermercados a menos de 500 metros."),
+            ("Jardines infantiles cercanos", "Cantidad de jardines infantiles a menos de 500 metros."),
+            ("Centros comerciales cercanos", "Cantidad de centros comerciales/malls a menos de 500 metros."),
+            ("Plazas cercanas", "Cantidad de plazas o áreas verdes a menos de 500 metros."),
+            ("Farmacias cercanas", "Cantidad de farmacias a menos de 500 metros."),
+            ("Clínicas u hospitales cercanos", "Cantidad de centros de salud a menos de 500 metros."),
+        ],
+    ),
+    (
+        "Contexto socioeconómico del sector",
+        [
+            ("Vulnerabilidad del sector (ranking nacional)", "Ranking nacional de vulnerabilidad social de la Unidad Vecinal, según el índice IGVUST del Registro Social de Hogares."),
+            ("Vulnerabilidad de la comuna", "El mismo índice de vulnerabilidad IGVUST, pero calculado a nivel de toda la comuna."),
+            ("Población en el Registro Social de Hogares", "Cantidad de personas registradas en el RSH dentro de la Unidad Vecinal del departamento."),
+            ("Porcentaje urbano del sector", "Qué tan urbanizada (vs. rural) es la Unidad Vecinal donde está el departamento."),
+        ],
+    ),
+]
+
+
+def _render_grupos_features() -> str:
+    bloques = []
+    for titulo, features in _FEATURE_GROUPS:
+        filas = "".join(
+            f"<tr><td style='padding:4px 10px 4px 0;font-weight:600;white-space:nowrap;vertical-align:top;'>{nombre}</td>"
+            f"<td style='padding:4px 0;color:#4A4A4A;'>{descripcion}</td></tr>"
+            for nombre, descripcion in features
+        )
+        bloques.append(
+            f"""
+<p style="color:{COLOR_TEXT_TITLE};font-weight:600;margin:14px 0 6px 0;">{titulo} ({len(features)})</p>
+<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">{filas}</table>"""
+        )
+    return "".join(bloques)
+
 
 def render() -> None:
     st.markdown(
@@ -38,6 +115,19 @@ catastro exhaustivo del mercado.
 
 <div class="app-card">
 
+### Qué variables usa el modelo para estimar el precio
+
+El modelo llega a un precio combinando **32 variables** de cada aviso, agrupadas en cuatro
+categorías. Ninguna variable por sí sola determina el precio — es la combinación de todas la
+que produce la estimación final.
+"""
+        + _render_grupos_features()
+        + """
+
+</div>
+
+<div class="app-card">
+
 ### Qué tan preciso es (el error del modelo)
 
 Medido sobre los 245 avisos de test (que el modelo no usó para entrenar):
@@ -53,6 +143,18 @@ El error **no es parejo en todo el rango de precios**: en departamentos más car
 aprender de ellos y los precios son más variables. Por eso la calificación de "oportunidad"
 no compara contra un error único, sino contra el error típico de avisos de precio similar
 (ver estratos más abajo).
+
+**¿Es esto bueno?** Como referencia, se compara contra dos formas "ingenuas" de estimar un
+precio sin ningún modelo:
+
+| Cómo se estima el precio | Error promedio (MAE) |
+|---|---|
+| Usar siempre el precio promedio del mercado, sin distinguir entre avisos | ≈ \\$125.900 |
+| Precio/m² del sector × superficie del departamento, sin ajustar nada más | ≈ \\$79.200 |
+| **Este modelo** | **≈ \\$48.700** |
+
+El modelo reduce el error a menos de la mitad frente a usar solo el precio/m² del sector, y a
+poco más de un tercio frente a asumir un precio promedio único para todo el mercado.
 
 </div>
 
