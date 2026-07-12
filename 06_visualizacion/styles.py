@@ -131,6 +131,11 @@ def inject_css() -> None:
             font-size: 0.8rem;
             margin-bottom: 6px;
         }}
+        .card-published {{
+            color: #9A9A9A !important;
+            font-size: 0.75rem;
+            margin-bottom: 2px;
+        }}
         .card-freshness {{
             color: #9A9A9A !important;
             font-size: 0.75rem;

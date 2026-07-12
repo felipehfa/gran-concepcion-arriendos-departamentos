@@ -113,7 +113,7 @@ def load_data() -> pd.DataFrame:
         # son arriendos reales (ventas mal clasificadas, datos corruptos como
         # una moneda mal detectada), así que tampoco deberían aparecer acá.
         df = df[df["precio"] <= iv.PRECIO_MAXIMO_ARRIENDO_CLP]
-        df = df.drop(columns=["precio_clp", "moneda", "fecha_publicacion_aprox"])
+        df = df.drop(columns=["precio_clp", "moneda"])
 
     for bool_col in ["amoblado", "piscina", "ascensor", "conserjeria"]:
         df[bool_col] = df[bool_col].fillna(0).astype(int).astype(bool)

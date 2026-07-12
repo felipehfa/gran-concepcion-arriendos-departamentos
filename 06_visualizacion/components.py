@@ -42,6 +42,33 @@ def _format_frescura(fecha_str) -> str:
     return f"Datos verificados: hace {dias} días"
 
 
+def _format_publicacion(fecha_val) -> str:
+    # fecha_publicacion_aprox es una aproximación calculada por el scraper a
+    # partir de texto relativo ("hace 3 meses"), y queda nula en ~1 de cada 5
+    # avisos activos porque esa página de detalle no siempre trae esa info:
+    # se muestra "no disponible" en vez de inventarle una fecha al aviso.
+    # Llega como Timestamp/NaT (convertir_precios_uf_a_clp la normaliza con
+    # pd.to_datetime como parte de su propia lógica), no como string.
+    if pd.isna(fecha_val):
+        return "Publicado: fecha no disponible"
+    fecha = pd.Timestamp(fecha_val).date()
+    dias = (date.today() - fecha).days
+    if dias <= 0:
+        return "Publicado: hoy"
+    if dias == 1:
+        return "Publicado: hace 1 día"
+    if dias < 7:
+        return f"Publicado: hace {dias} días"
+    if dias < 30:
+        semanas = dias // 7
+        return f"Publicado: hace {semanas} semana{'s' if semanas != 1 else ''}"
+    if dias < 365:
+        meses = dias // 30
+        return f"Publicado: hace {meses} mes{'es' if meses != 1 else ''}"
+    anos = dias // 365
+    return f"Publicado: hace {anos} año{'s' if anos != 1 else ''}"
+
+
 def render_card(row: pd.Series) -> None:
     etiqueta = row["etiqueta"]
     confianza = row["nivel_confianza"]
@@ -65,6 +92,7 @@ def render_card(row: pd.Series) -> None:
                 📐 {row['superficie_util_m2']:.0f} m²</p>
             <p class="card-price">${_clp(row['precio'])}</p>
             <p class="card-expenses">Gastos comunes: ${_clp(row['gastos_comunes'])}</p>
+            <p class="card-published">{_format_publicacion(row.get('fecha_publicacion_aprox'))}</p>
             <p class="card-freshness">{_format_frescura(row.get('fecha_ultimo_chequeo_estado'))}</p>
             <p class="card-link"><a href="{html.escape(row['url'])}" target="_blank" rel="noopener noreferrer">
                 Ver publicación original →</a></p>

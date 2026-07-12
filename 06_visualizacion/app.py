@@ -11,6 +11,7 @@ from styles import CONFIANZA_ORDER, ETIQUETA_ORDER, inject_css
 ORDER_OPTIONS = [
     "Más relevantes",
     "Mejor oportunidad",
+    "Más recientes primero",
     "Precio: menor a mayor",
     "Precio: mayor a menor",
 ]
@@ -21,6 +22,11 @@ def sort_listings(df, order: str):
         return df
     if order == "Mejor oportunidad":
         return df.sort_values("z_robusto", ascending=True)
+    if order == "Más recientes primero":
+        # fecha_publicacion_aprox es aproximada (ver explicacion.py) y puede ser
+        # nula (~1 de cada 5 avisos activos, el scraper no siempre la captura):
+        # esos avisos van al final en vez de asumirles una fecha.
+        return df.sort_values("fecha_publicacion_aprox", ascending=False, na_position="last")
     if order == "Precio: menor a mayor":
         return df.sort_values("precio", ascending=True)
     if order == "Precio: mayor a menor":
