@@ -75,9 +75,22 @@ def inject_css() -> None:
             font-size: 1.05rem;
             margin-top: 0;
         }}
-        .result-count {{
-            color: {COLOR_TEXT_BODY} !important;
+        .result-count-card {{
+            display: inline-block;
+            background-color: {COLOR_PRIMARY};
+            color: #FFFFFF !important;
             font-size: 0.95rem;
+            font-weight: 700;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+            border-radius: 10px;
+            padding: 10px 18px;
+            margin-top: 2px;
+        }}
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div {{
+            background-color: {COLOR_CARD_BG};
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+            border-radius: 10px;
+            border-color: transparent !important;
         }}
         .app-card, [data-testid="stSidebarUserContent"] {{
             background-color: {COLOR_CARD_BG};

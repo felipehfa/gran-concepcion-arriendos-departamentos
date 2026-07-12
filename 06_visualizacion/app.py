@@ -9,9 +9,9 @@ from filters import render_sidebar
 from styles import CONFIANZA_ORDER, ETIQUETA_ORDER, inject_css
 
 ORDER_OPTIONS = [
+    "Más recientes primero",
     "Más relevantes",
     "Mejor oportunidad",
-    "Más recientes primero",
     "Precio: menor a mayor",
     "Precio: mayor a menor",
 ]
@@ -62,7 +62,7 @@ def render_buscador() -> None:
         order = st.selectbox("Ordenar por", ORDER_OPTIONS, label_visibility="collapsed")
     with count_col:
         st.markdown(
-            f'<p class="result-count">{len(filtered_df)} departamentos encontrados</p>',
+            f'<div class="result-count-card">{len(filtered_df)} departamentos encontrados</div>',
             unsafe_allow_html=True,
         )
 
