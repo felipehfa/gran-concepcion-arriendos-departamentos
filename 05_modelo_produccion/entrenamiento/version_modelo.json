@@ -1,6 +1,6 @@
 {
-  "contador": 2,
-  "version_actual": "v0002_20260711145700_eae758c2",
+  "contador": 5,
+  "version_actual": "v0005_20260712085625_lightgbm_03cb22af",
   "historial": [
     {
       "version": "v0001_20260711131332_eae758c2",
@@ -11,6 +11,24 @@
       "version": "v0002_20260711145700_eae758c2",
       "fecha_entrenamiento": "2026-07-11 14:57:00",
       "hash_hiperparametros": "eae758c2"
+    },
+    {
+      "version": "v0003_20260712001019_lightgbm_836c4148",
+      "algoritmo": "lightgbm",
+      "fecha_entrenamiento": "2026-07-12 00:10:19",
+      "hash_hiperparametros": "836c4148"
+    },
+    {
+      "version": "v0004_20260712001353_lightgbm_836c4148",
+      "algoritmo": "lightgbm",
+      "fecha_entrenamiento": "2026-07-12 00:13:53",
+      "hash_hiperparametros": "836c4148"
+    },
+    {
+      "version": "v0005_20260712085625_lightgbm_03cb22af",
+      "algoritmo": "lightgbm",
+      "fecha_entrenamiento": "2026-07-12 08:56:25",
+      "hash_hiperparametros": "03cb22af"
     }
   ]
 }

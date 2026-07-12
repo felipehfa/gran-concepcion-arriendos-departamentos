@@ -15,13 +15,13 @@
     "n_seeds_k_curve": 5
   },
   "resumen": {
-    "n_filas_total": 1476,
+    "n_filas_total": 1628,
     "n_features_iniciales": 42,
     "n_features_tras_constantes": 41,
     "n_candidatas_presence": 41,
-    "k_optimo": 20,
-    "n_eliminadas_correlacion_final": 0,
-    "n_features_finales": 20
+    "k_optimo": 33,
+    "n_eliminadas_correlacion_final": 1,
+    "n_features_finales": 32
   },
   "features_constantes_eliminadas": [
     "quincho"
@@ -29,760 +29,799 @@
   "stability_selection": [
     {
       "feature": "amoblado",
-      "mean_imp": 14337.304681,
-      "std_imp": 176.748045,
-      "median_imp": 14335.854004,
+      "mean_imp": 13805.472441,
+      "std_imp": 169.141701,
+      "median_imp": 13800.405078,
       "cv_imp": 0.0123,
       "presence_pct": 1.0,
-      "stability_score": 0.987822,
+      "stability_score": 0.987897,
       "passes_presence": true
     },
     {
       "feature": "estacionamientos",
-      "mean_imp": 13882.444225,
-      "std_imp": 250.937391,
-      "median_imp": 13897.156543,
-      "cv_imp": 0.0181,
+      "mean_imp": 12278.721875,
+      "std_imp": 260.190625,
+      "median_imp": 12277.117969,
+      "cv_imp": 0.0212,
       "presence_pct": 1.0,
-      "stability_score": 0.982245,
-      "passes_presence": true
-    },
-    {
-      "feature": "gastos_comunes",
-      "mean_imp": 12471.240807,
-      "std_imp": 344.559382,
-      "median_imp": 12422.073828,
-      "cv_imp": 0.0276,
-      "presence_pct": 1.0,
-      "stability_score": 0.973114,
-      "passes_presence": true
-    },
-    {
-      "feature": "banos",
-      "mean_imp": 38097.124062,
-      "std_imp": 1205.137467,
-      "median_imp": 38129.785742,
-      "cv_imp": 0.0316,
-      "presence_pct": 1.0,
-      "stability_score": 0.969337,
-      "passes_presence": true
-    },
-    {
-      "feature": "antiguedad_anos",
-      "mean_imp": 6987.95416,
-      "std_imp": 261.732268,
-      "median_imp": 7056.860059,
-      "cv_imp": 0.0375,
-      "presence_pct": 1.0,
-      "stability_score": 0.963897,
-      "passes_presence": true
-    },
-    {
-      "feature": "precio_m2_sector_departamento",
-      "mean_imp": 7237.255586,
-      "std_imp": 296.114799,
-      "median_imp": 7240.389355,
-      "cv_imp": 0.0409,
-      "presence_pct": 1.0,
-      "stability_score": 0.960693,
-      "passes_presence": true
-    },
-    {
-      "feature": "rank_nac",
-      "mean_imp": 9766.113213,
-      "std_imp": 417.025498,
-      "median_imp": 9767.817236,
-      "cv_imp": 0.0427,
-      "presence_pct": 1.0,
-      "stability_score": 0.959047,
+      "stability_score": 0.979249,
       "passes_presence": true
     },
     {
       "feature": "piso_unidad",
-      "mean_imp": 5097.287109,
-      "std_imp": 234.694634,
-      "median_imp": 5091.930933,
-      "cv_imp": 0.046,
+      "mean_imp": 5462.776331,
+      "std_imp": 116.005858,
+      "median_imp": 5461.963037,
+      "cv_imp": 0.0212,
       "presence_pct": 1.0,
-      "stability_score": 0.955984,
+      "stability_score": 0.979206,
       "passes_presence": true
     },
     {
-      "feature": "piscina",
-      "mean_imp": 4424.783626,
-      "std_imp": 241.493524,
-      "median_imp": 4427.683643,
-      "cv_imp": 0.0546,
+      "feature": "precio_m2_sector_departamento",
+      "mean_imp": 8557.698903,
+      "std_imp": 203.935978,
+      "median_imp": 8590.607129,
+      "cv_imp": 0.0238,
       "presence_pct": 1.0,
-      "stability_score": 0.948247,
+      "stability_score": 0.976724,
+      "passes_presence": true
+    },
+    {
+      "feature": "banos",
+      "mean_imp": 38765.474818,
+      "std_imp": 1183.642712,
+      "median_imp": 38661.216797,
+      "cv_imp": 0.0305,
+      "presence_pct": 1.0,
+      "stability_score": 0.970371,
+      "passes_presence": true
+    },
+    {
+      "feature": "gastos_comunes",
+      "mean_imp": 13591.103861,
+      "std_imp": 429.843843,
+      "median_imp": 13481.122266,
+      "cv_imp": 0.0316,
+      "presence_pct": 1.0,
+      "stability_score": 0.969343,
+      "passes_presence": true
+    },
+    {
+      "feature": "rank_nac",
+      "mean_imp": 10263.542913,
+      "std_imp": 354.025039,
+      "median_imp": 10295.76123,
+      "cv_imp": 0.0345,
+      "presence_pct": 1.0,
+      "stability_score": 0.966657,
+      "passes_presence": true
+    },
+    {
+      "feature": "antiguedad_anos",
+      "mean_imp": 6969.234329,
+      "std_imp": 302.643399,
+      "median_imp": 6963.022119,
+      "cv_imp": 0.0434,
+      "presence_pct": 1.0,
+      "stability_score": 0.958382,
       "passes_presence": true
     },
     {
       "feature": "distancia_centro_concepcion_m",
-      "mean_imp": 6342.501053,
-      "std_imp": 370.5427,
-      "median_imp": 6401.328857,
-      "cv_imp": 0.0584,
+      "mean_imp": 5364.958477,
+      "std_imp": 261.675983,
+      "median_imp": 5388.289746,
+      "cv_imp": 0.0488,
       "presence_pct": 1.0,
-      "stability_score": 0.944803,
-      "passes_presence": true
-    },
-    {
-      "feature": "superficie_util_m2",
-      "mean_imp": 36461.976497,
-      "std_imp": 2156.257549,
-      "median_imp": 36567.462695,
-      "cv_imp": 0.0591,
-      "presence_pct": 1.0,
-      "stability_score": 0.944165,
-      "passes_presence": true
-    },
-    {
-      "feature": "superficie_total_m2",
-      "mean_imp": 33458.349336,
-      "std_imp": 2325.688952,
-      "median_imp": 33849.183594,
-      "cv_imp": 0.0695,
-      "presence_pct": 1.0,
-      "stability_score": 0.935008,
-      "passes_presence": true
-    },
-    {
-      "feature": "ratio_total_util",
-      "mean_imp": 3716.071064,
-      "std_imp": 284.391477,
-      "median_imp": 3753.654248,
-      "cv_imp": 0.0765,
-      "presence_pct": 1.0,
-      "stability_score": 0.92891,
-      "passes_presence": true
-    },
-    {
-      "feature": "pob_rsh_uv",
-      "mean_imp": 1641.001656,
-      "std_imp": 140.713058,
-      "median_imp": 1643.305115,
-      "cv_imp": 0.0857,
-      "presence_pct": 1.0,
-      "stability_score": 0.921024,
-      "passes_presence": true
-    },
-    {
-      "feature": "cantidad_paraderos",
-      "mean_imp": 1402.045516,
-      "std_imp": 135.701674,
-      "median_imp": 1390.736774,
-      "cv_imp": 0.0968,
-      "presence_pct": 1.0,
-      "stability_score": 0.911753,
-      "passes_presence": true
-    },
-    {
-      "feature": "distancia_centro_comuna_m",
-      "mean_imp": 2518.652417,
-      "std_imp": 250.95367,
-      "median_imp": 2483.984656,
-      "cv_imp": 0.0996,
-      "presence_pct": 1.0,
-      "stability_score": 0.90939,
-      "passes_presence": true
-    },
-    {
-      "feature": "cantidad_colegios",
-      "mean_imp": 1352.458265,
-      "std_imp": 135.157062,
-      "median_imp": 1351.937164,
-      "cv_imp": 0.0999,
-      "presence_pct": 1.0,
-      "stability_score": 0.909145,
-      "passes_presence": true
-    },
-    {
-      "feature": "p_urbano",
-      "mean_imp": 2235.225411,
-      "std_imp": 233.455063,
-      "median_imp": 2221.185535,
-      "cv_imp": 0.1044,
-      "presence_pct": 1.0,
-      "stability_score": 0.905433,
-      "passes_presence": true
-    },
-    {
-      "feature": "ascensor",
-      "mean_imp": 2531.662338,
-      "std_imp": 268.119809,
-      "median_imp": 2536.808374,
-      "cv_imp": 0.1059,
-      "presence_pct": 1.0,
-      "stability_score": 0.904235,
-      "passes_presence": true
-    },
-    {
-      "feature": "tiene_comparables_cercanos",
-      "mean_imp": 1320.69293,
-      "std_imp": 141.007066,
-      "median_imp": 1319.735535,
-      "cv_imp": 0.1068,
-      "presence_pct": 1.0,
-      "stability_score": 0.903532,
+      "stability_score": 0.953493,
       "passes_presence": true
     },
     {
       "feature": "bodegas",
-      "mean_imp": 1580.581004,
-      "std_imp": 174.210307,
-      "median_imp": 1530.026624,
-      "cv_imp": 0.1102,
+      "mean_imp": 3627.05175,
+      "std_imp": 176.976109,
+      "median_imp": 3632.596179,
+      "cv_imp": 0.0488,
       "presence_pct": 1.0,
-      "stability_score": 0.900723,
+      "stability_score": 0.953477,
       "passes_presence": true
     },
     {
-      "feature": "cantidad_jardines_infantiles",
-      "mean_imp": 1433.28131,
-      "std_imp": 160.826898,
-      "median_imp": 1410.424835,
-      "cv_imp": 0.1122,
+      "feature": "piscina",
+      "mean_imp": 4880.262093,
+      "std_imp": 289.157348,
+      "median_imp": 4898.196851,
+      "cv_imp": 0.0593,
       "presence_pct": 1.0,
-      "stability_score": 0.899112,
+      "stability_score": 0.944064,
+      "passes_presence": true
+    },
+    {
+      "feature": "superficie_util_m2",
+      "mean_imp": 34034.006836,
+      "std_imp": 2041.162007,
+      "median_imp": 34409.19375,
+      "cv_imp": 0.06,
+      "presence_pct": 1.0,
+      "stability_score": 0.943419,
+      "passes_presence": true
+    },
+    {
+      "feature": "distancia_centro_comuna_m",
+      "mean_imp": 3107.102965,
+      "std_imp": 196.252109,
+      "median_imp": 3096.558643,
+      "cv_imp": 0.0632,
+      "presence_pct": 1.0,
+      "stability_score": 0.94059,
+      "passes_presence": true
+    },
+    {
+      "feature": "superficie_total_m2",
+      "mean_imp": 33053.535547,
+      "std_imp": 2480.936772,
+      "median_imp": 32895.891211,
+      "cv_imp": 0.0751,
+      "presence_pct": 1.0,
+      "stability_score": 0.930182,
+      "passes_presence": true
+    },
+    {
+      "feature": "ascensor",
+      "mean_imp": 3621.207961,
+      "std_imp": 279.368745,
+      "median_imp": 3660.17981,
+      "cv_imp": 0.0771,
+      "presence_pct": 1.0,
+      "stability_score": 0.928378,
+      "passes_presence": true
+    },
+    {
+      "feature": "ratio_total_util",
+      "mean_imp": 3780.120637,
+      "std_imp": 326.517492,
+      "median_imp": 3823.044775,
+      "cv_imp": 0.0864,
+      "presence_pct": 1.0,
+      "stability_score": 0.92049,
+      "passes_presence": true
+    },
+    {
+      "feature": "p_urbano",
+      "mean_imp": 2735.088726,
+      "std_imp": 241.794709,
+      "median_imp": 2816.118213,
+      "cv_imp": 0.0884,
+      "presence_pct": 1.0,
+      "stability_score": 0.918776,
+      "passes_presence": true
+    },
+    {
+      "feature": "pob_rsh_uv",
+      "mean_imp": 1387.1712,
+      "std_imp": 131.431871,
+      "median_imp": 1389.607758,
+      "cv_imp": 0.0947,
+      "presence_pct": 1.0,
+      "stability_score": 0.913452,
       "passes_presence": true
     },
     {
       "feature": "nivel_barrio",
-      "mean_imp": 1443.123206,
-      "std_imp": 163.836833,
-      "median_imp": 1458.629724,
-      "cv_imp": 0.1135,
+      "mean_imp": 1238.663933,
+      "std_imp": 119.169669,
+      "median_imp": 1226.148624,
+      "cv_imp": 0.0962,
       "presence_pct": 1.0,
-      "stability_score": 0.898045,
+      "stability_score": 0.912235,
       "passes_presence": true
     },
     {
       "feature": "hog_uv",
-      "mean_imp": 1494.672362,
-      "std_imp": 172.457249,
-      "median_imp": 1462.480267,
-      "cv_imp": 0.1154,
+      "mean_imp": 2083.909562,
+      "std_imp": 213.527829,
+      "median_imp": 2079.437427,
+      "cv_imp": 0.1025,
       "presence_pct": 1.0,
-      "stability_score": 0.896554,
+      "stability_score": 0.907058,
       "passes_presence": true
     },
     {
-      "feature": "cantidad_clinicas",
-      "mean_imp": 1166.995004,
-      "std_imp": 136.546244,
-      "median_imp": 1162.601544,
-      "cv_imp": 0.117,
+      "feature": "cantidad_colegios",
+      "mean_imp": 1236.244856,
+      "std_imp": 128.083343,
+      "median_imp": 1222.975201,
+      "cv_imp": 0.1036,
       "presence_pct": 1.0,
-      "stability_score": 0.89525,
-      "passes_presence": true
-    },
-    {
-      "feature": "cantidad_supermercados",
-      "mean_imp": 1496.791864,
-      "std_imp": 180.343664,
-      "median_imp": 1468.030457,
-      "cv_imp": 0.1205,
-      "presence_pct": 1.0,
-      "stability_score": 0.892469,
-      "passes_presence": true
-    },
-    {
-      "feature": "c_ig_com",
-      "mean_imp": 1823.265912,
-      "std_imp": 220.977431,
-      "median_imp": 1839.755402,
-      "cv_imp": 0.1212,
-      "presence_pct": 1.0,
-      "stability_score": 0.891903,
-      "passes_presence": true
-    },
-    {
-      "feature": "dormitorios",
-      "mean_imp": 3694.27524,
-      "std_imp": 490.682942,
-      "median_imp": 3556.734589,
-      "cv_imp": 0.1328,
-      "presence_pct": 1.0,
-      "stability_score": 0.882751,
-      "passes_presence": true
-    },
-    {
-      "feature": "cantidad_centros_comerciales",
-      "mean_imp": 705.965134,
-      "std_imp": 95.719562,
-      "median_imp": 714.272964,
-      "cv_imp": 0.1356,
-      "presence_pct": 1.0,
-      "stability_score": 0.880602,
+      "stability_score": 0.90612,
       "passes_presence": true
     },
     {
       "feature": "condominio_cerrado",
-      "mean_imp": 859.718875,
-      "std_imp": 125.788193,
-      "median_imp": 879.672842,
-      "cv_imp": 0.1463,
+      "mean_imp": 1316.249042,
+      "std_imp": 138.57085,
+      "median_imp": 1345.620172,
+      "cv_imp": 0.1053,
       "presence_pct": 1.0,
-      "stability_score": 0.872362,
+      "stability_score": 0.904751,
       "passes_presence": true
     },
     {
-      "feature": "cantidad_plazas",
-      "mean_imp": 1205.263452,
-      "std_imp": 177.511598,
-      "median_imp": 1202.524524,
-      "cv_imp": 0.1473,
+      "feature": "cantidad_supermercados",
+      "mean_imp": 1323.374295,
+      "std_imp": 155.959529,
+      "median_imp": 1307.869467,
+      "cv_imp": 0.1178,
       "presence_pct": 1.0,
-      "stability_score": 0.871627,
+      "stability_score": 0.894574,
       "passes_presence": true
     },
     {
-      "feature": "cantidad_farmacias",
-      "mean_imp": 1118.563651,
-      "std_imp": 167.37127,
-      "median_imp": 1104.338983,
-      "cv_imp": 0.1496,
+      "feature": "tiene_comparables_cercanos",
+      "mean_imp": 1247.194734,
+      "std_imp": 147.701418,
+      "median_imp": 1260.241479,
+      "cv_imp": 0.1184,
       "presence_pct": 1.0,
-      "stability_score": 0.869845,
+      "stability_score": 0.894113,
       "passes_presence": true
     },
     {
-      "feature": "cantidad_universidades",
-      "mean_imp": 537.005084,
-      "std_imp": 93.778349,
-      "median_imp": 547.288385,
-      "cv_imp": 0.1746,
+      "feature": "cantidad_jardines_infantiles",
+      "mean_imp": 1065.219055,
+      "std_imp": 131.32124,
+      "median_imp": 1043.880286,
+      "cv_imp": 0.1233,
       "presence_pct": 1.0,
-      "stability_score": 0.85133,
+      "stability_score": 0.890249,
       "passes_presence": true
     },
     {
-      "feature": "conserjeria",
-      "mean_imp": 710.272371,
-      "std_imp": 124.648101,
-      "median_imp": 714.958344,
-      "cv_imp": 0.1755,
+      "feature": "cantidad_paraderos",
+      "mean_imp": 1148.087592,
+      "std_imp": 156.837396,
+      "median_imp": 1164.805408,
+      "cv_imp": 0.1366,
       "presence_pct": 1.0,
-      "stability_score": 0.850707,
+      "stability_score": 0.879811,
       "passes_presence": true
     },
     {
       "feature": "estacionamiento_visitas",
-      "mean_imp": 514.124264,
-      "std_imp": 136.814048,
-      "median_imp": 460.014662,
-      "cv_imp": 0.2661,
+      "mean_imp": 942.320046,
+      "std_imp": 133.928442,
+      "median_imp": 922.838925,
+      "cv_imp": 0.1421,
       "presence_pct": 1.0,
-      "stability_score": 0.78982,
+      "stability_score": 0.87556,
+      "passes_presence": true
+    },
+    {
+      "feature": "conserjeria",
+      "mean_imp": 916.936016,
+      "std_imp": 132.148776,
+      "median_imp": 895.52821,
+      "cv_imp": 0.1441,
+      "presence_pct": 1.0,
+      "stability_score": 0.874034,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_centros_comerciales",
+      "mean_imp": 411.963039,
+      "std_imp": 62.643529,
+      "median_imp": 418.38078,
+      "cv_imp": 0.1521,
+      "presence_pct": 1.0,
+      "stability_score": 0.86801,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_plazas",
+      "mean_imp": 1084.04727,
+      "std_imp": 175.98547,
+      "median_imp": 1024.97074,
+      "cv_imp": 0.1623,
+      "presence_pct": 1.0,
+      "stability_score": 0.860333,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_farmacias",
+      "mean_imp": 773.311986,
+      "std_imp": 125.665466,
+      "median_imp": 751.630167,
+      "cv_imp": 0.1625,
+      "presence_pct": 1.0,
+      "stability_score": 0.860213,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_clinicas",
+      "mean_imp": 1281.546301,
+      "std_imp": 212.485514,
+      "median_imp": 1260.217014,
+      "cv_imp": 0.1658,
+      "presence_pct": 1.0,
+      "stability_score": 0.857777,
+      "passes_presence": true
+    },
+    {
+      "feature": "c_ig_com",
+      "mean_imp": 685.912794,
+      "std_imp": 114.958365,
+      "median_imp": 697.767955,
+      "cv_imp": 0.1676,
+      "presence_pct": 1.0,
+      "stability_score": 0.856458,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_universidades",
+      "mean_imp": 409.871037,
+      "std_imp": 77.946979,
+      "median_imp": 413.318584,
+      "cv_imp": 0.1902,
+      "presence_pct": 1.0,
+      "stability_score": 0.840213,
       "passes_presence": true
     },
     {
       "feature": "cantidad_hospitales",
-      "mean_imp": 163.270662,
-      "std_imp": 48.469667,
-      "median_imp": 146.924712,
-      "cv_imp": 0.2969,
+      "mean_imp": 229.666053,
+      "std_imp": 55.115115,
+      "median_imp": 216.476906,
+      "cv_imp": 0.24,
       "presence_pct": 1.0,
-      "stability_score": 0.771089,
-      "passes_presence": true
-    },
-    {
-      "feature": "cantidad_estaciones_metro",
-      "mean_imp": 72.128656,
-      "std_imp": 26.410477,
-      "median_imp": 76.13082,
-      "cv_imp": 0.3662,
-      "presence_pct": 1.0,
-      "stability_score": 0.73198,
-      "passes_presence": true
-    },
-    {
-      "feature": "c_ig_nac",
-      "mean_imp": 311.131165,
-      "std_imp": 150.218847,
-      "median_imp": 277.963876,
-      "cv_imp": 0.4828,
-      "presence_pct": 1.0,
-      "stability_score": 0.674393,
-      "passes_presence": true
-    },
-    {
-      "feature": "comuna_san-pedro-de-la-paz-biobio",
-      "mean_imp": 78.936832,
-      "std_imp": 38.165944,
-      "median_imp": 76.80556,
-      "cv_imp": 0.4835,
-      "presence_pct": 1.0,
-      "stability_score": 0.674082,
-      "passes_presence": true
-    },
-    {
-      "feature": "c_ig_reg",
-      "mean_imp": 67.14599,
-      "std_imp": 32.641804,
-      "median_imp": 61.215922,
-      "cv_imp": 0.4861,
-      "presence_pct": 1.0,
-      "stability_score": 0.672888,
+      "stability_score": 0.806465,
       "passes_presence": true
     },
     {
       "feature": "comuna_otras comunas",
-      "mean_imp": 71.910313,
-      "std_imp": 38.307514,
-      "median_imp": 67.079885,
-      "cv_imp": 0.5327,
+      "mean_imp": 82.386071,
+      "std_imp": 25.858787,
+      "median_imp": 82.255139,
+      "cv_imp": 0.3139,
       "presence_pct": 1.0,
-      "stability_score": 0.652438,
+      "stability_score": 0.761108,
+      "passes_presence": true
+    },
+    {
+      "feature": "dormitorios",
+      "mean_imp": 1866.454968,
+      "std_imp": 735.955138,
+      "median_imp": 1514.139716,
+      "cv_imp": 0.3943,
+      "presence_pct": 1.0,
+      "stability_score": 0.717202,
+      "passes_presence": true
+    },
+    {
+      "feature": "comuna_san-pedro-de-la-paz-biobio",
+      "mean_imp": 51.889903,
+      "std_imp": 21.003645,
+      "median_imp": 51.777257,
+      "cv_imp": 0.4048,
+      "presence_pct": 1.0,
+      "stability_score": 0.711859,
+      "passes_presence": true
+    },
+    {
+      "feature": "c_ig_nac",
+      "mean_imp": 192.55893,
+      "std_imp": 104.040685,
+      "median_imp": 178.880804,
+      "cv_imp": 0.5403,
+      "presence_pct": 1.0,
+      "stability_score": 0.649222,
+      "passes_presence": true
+    },
+    {
+      "feature": "cantidad_estaciones_metro",
+      "mean_imp": 12.690588,
+      "std_imp": 9.03748,
+      "median_imp": 10.097787,
+      "cv_imp": 0.7121,
+      "presence_pct": 1.0,
+      "stability_score": 0.584064,
+      "passes_presence": true
+    },
+    {
+      "feature": "c_ig_reg",
+      "mean_imp": 19.740665,
+      "std_imp": 16.842674,
+      "median_imp": 16.119487,
+      "cv_imp": 0.8532,
+      "presence_pct": 0.9,
+      "stability_score": 0.485647,
       "passes_presence": true
     }
   ],
   "metric_curve_k": [
     {
       "k": 3,
-      "mae_val": 86436.36,
-      "mae_val_std_seeds": 174.75,
-      "rmse_val": 117989.91,
-      "r2_val": 0.5451
+      "mae_val": 102603.88,
+      "mae_val_std_seeds": 224.62,
+      "rmse_val": 142070.29,
+      "r2_val": 0.2378
     },
     {
       "k": 4,
-      "mae_val": 73696.21,
-      "mae_val_std_seeds": 315.12,
-      "rmse_val": 104526.81,
-      "r2_val": 0.643
+      "mae_val": 98675.73,
+      "mae_val_std_seeds": 269.27,
+      "rmse_val": 140661.29,
+      "r2_val": 0.2528
     },
     {
       "k": 5,
-      "mae_val": 72595.14,
-      "mae_val_std_seeds": 286.76,
-      "rmse_val": 101504.99,
-      "r2_val": 0.6633
+      "mae_val": 75369.72,
+      "mae_val_std_seeds": 94.53,
+      "rmse_val": 106352.53,
+      "r2_val": 0.5728
     },
     {
       "k": 6,
-      "mae_val": 66344.7,
-      "mae_val_std_seeds": 612.89,
-      "rmse_val": 92778.96,
-      "r2_val": 0.7187
+      "mae_val": 66429.06,
+      "mae_val_std_seeds": 374.85,
+      "rmse_val": 94737.48,
+      "r2_val": 0.661
     },
     {
       "k": 7,
-      "mae_val": 63510.3,
-      "mae_val_std_seeds": 573.86,
-      "rmse_val": 90436.29,
-      "r2_val": 0.7328
+      "mae_val": 65719.76,
+      "mae_val_std_seeds": 760.72,
+      "rmse_val": 95333.23,
+      "r2_val": 0.6567
     },
     {
       "k": 8,
-      "mae_val": 64590.26,
-      "mae_val_std_seeds": 810.13,
-      "rmse_val": 92480.6,
-      "r2_val": 0.7205
+      "mae_val": 64736.25,
+      "mae_val_std_seeds": 1011.74,
+      "rmse_val": 93776.65,
+      "r2_val": 0.6678
     },
     {
       "k": 9,
-      "mae_val": 63618.99,
-      "mae_val_std_seeds": 607.57,
-      "rmse_val": 90677.37,
-      "r2_val": 0.7313
+      "mae_val": 63534.64,
+      "mae_val_std_seeds": 441.77,
+      "rmse_val": 92359.1,
+      "r2_val": 0.6779
     },
     {
       "k": 10,
-      "mae_val": 62339.95,
-      "mae_val_std_seeds": 558.27,
-      "rmse_val": 87959.58,
-      "r2_val": 0.7472
+      "mae_val": 62717.69,
+      "mae_val_std_seeds": 248.95,
+      "rmse_val": 90742.0,
+      "r2_val": 0.689
     },
     {
       "k": 11,
-      "mae_val": 54307.82,
-      "mae_val_std_seeds": 585.53,
-      "rmse_val": 77195.45,
-      "r2_val": 0.8053
+      "mae_val": 63856.61,
+      "mae_val_std_seeds": 376.32,
+      "rmse_val": 92500.07,
+      "r2_val": 0.6768
     },
     {
       "k": 12,
-      "mae_val": 53050.18,
-      "mae_val_std_seeds": 507.84,
-      "rmse_val": 75258.02,
-      "r2_val": 0.8149
+      "mae_val": 55443.32,
+      "mae_val_std_seeds": 228.97,
+      "rmse_val": 85659.11,
+      "r2_val": 0.7228
     },
     {
       "k": 13,
-      "mae_val": 53852.39,
-      "mae_val_std_seeds": 298.39,
-      "rmse_val": 76191.95,
-      "r2_val": 0.8103
+      "mae_val": 55282.89,
+      "mae_val_std_seeds": 443.88,
+      "rmse_val": 85061.56,
+      "r2_val": 0.7267
     },
     {
       "k": 14,
-      "mae_val": 53042.08,
-      "mae_val_std_seeds": 492.06,
-      "rmse_val": 75719.15,
-      "r2_val": 0.8126
+      "mae_val": 54363.78,
+      "mae_val_std_seeds": 639.44,
+      "rmse_val": 84492.86,
+      "r2_val": 0.7303
     },
     {
       "k": 15,
-      "mae_val": 53372.76,
-      "mae_val_std_seeds": 454.35,
-      "rmse_val": 76471.53,
-      "r2_val": 0.8089
+      "mae_val": 54709.17,
+      "mae_val_std_seeds": 664.26,
+      "rmse_val": 84402.61,
+      "r2_val": 0.731
     },
     {
       "k": 16,
-      "mae_val": 53215.5,
-      "mae_val_std_seeds": 545.19,
-      "rmse_val": 75657.82,
-      "r2_val": 0.8129
+      "mae_val": 54396.08,
+      "mae_val_std_seeds": 817.4,
+      "rmse_val": 83671.12,
+      "r2_val": 0.7355
     },
     {
       "k": 17,
-      "mae_val": 52797.88,
-      "mae_val_std_seeds": 694.25,
-      "rmse_val": 74891.59,
-      "r2_val": 0.8167
+      "mae_val": 54520.2,
+      "mae_val_std_seeds": 278.0,
+      "rmse_val": 83937.51,
+      "r2_val": 0.7339
     },
     {
       "k": 18,
-      "mae_val": 53241.22,
-      "mae_val_std_seeds": 647.29,
-      "rmse_val": 75559.11,
-      "r2_val": 0.8134
+      "mae_val": 54735.13,
+      "mae_val_std_seeds": 239.07,
+      "rmse_val": 84649.73,
+      "r2_val": 0.7294
     },
     {
       "k": 19,
-      "mae_val": 52653.72,
-      "mae_val_std_seeds": 626.02,
-      "rmse_val": 74474.34,
-      "r2_val": 0.8188
+      "mae_val": 54793.03,
+      "mae_val_std_seeds": 525.08,
+      "rmse_val": 84860.9,
+      "r2_val": 0.728
     },
     {
       "k": 20,
-      "mae_val": 51634.66,
-      "mae_val_std_seeds": 279.02,
-      "rmse_val": 73327.14,
-      "r2_val": 0.8243
+      "mae_val": 55154.14,
+      "mae_val_std_seeds": 499.11,
+      "rmse_val": 84898.07,
+      "r2_val": 0.7278
     },
     {
       "k": 21,
-      "mae_val": 52163.62,
-      "mae_val_std_seeds": 685.09,
-      "rmse_val": 73718.93,
-      "r2_val": 0.8224
+      "mae_val": 55144.92,
+      "mae_val_std_seeds": 864.2,
+      "rmse_val": 84864.33,
+      "r2_val": 0.728
     },
     {
       "k": 22,
-      "mae_val": 51942.61,
-      "mae_val_std_seeds": 520.24,
-      "rmse_val": 73470.55,
-      "r2_val": 0.8236
+      "mae_val": 54482.55,
+      "mae_val_std_seeds": 493.46,
+      "rmse_val": 84205.89,
+      "r2_val": 0.7322
     },
     {
       "k": 23,
-      "mae_val": 51718.27,
-      "mae_val_std_seeds": 670.75,
-      "rmse_val": 72774.69,
-      "r2_val": 0.8269
+      "mae_val": 54160.03,
+      "mae_val_std_seeds": 536.98,
+      "rmse_val": 83392.02,
+      "r2_val": 0.7373
     },
     {
       "k": 24,
-      "mae_val": 52192.48,
-      "mae_val_std_seeds": 422.12,
-      "rmse_val": 73205.78,
-      "r2_val": 0.8249
+      "mae_val": 54478.34,
+      "mae_val_std_seeds": 448.48,
+      "rmse_val": 83771.06,
+      "r2_val": 0.735
     },
     {
       "k": 25,
-      "mae_val": 51774.53,
-      "mae_val_std_seeds": 526.71,
-      "rmse_val": 72538.31,
-      "r2_val": 0.8281
+      "mae_val": 53772.47,
+      "mae_val_std_seeds": 726.42,
+      "rmse_val": 83346.18,
+      "r2_val": 0.7376
     },
     {
       "k": 26,
-      "mae_val": 51900.61,
-      "mae_val_std_seeds": 489.79,
-      "rmse_val": 72936.29,
-      "r2_val": 0.8262
+      "mae_val": 53566.31,
+      "mae_val_std_seeds": 442.09,
+      "rmse_val": 81967.29,
+      "r2_val": 0.7463
     },
     {
       "k": 27,
-      "mae_val": 52151.16,
-      "mae_val_std_seeds": 311.5,
-      "rmse_val": 73989.83,
-      "r2_val": 0.8211
+      "mae_val": 53876.8,
+      "mae_val_std_seeds": 412.87,
+      "rmse_val": 82646.91,
+      "r2_val": 0.742
     },
     {
       "k": 28,
-      "mae_val": 51859.62,
-      "mae_val_std_seeds": 290.74,
-      "rmse_val": 73856.13,
-      "r2_val": 0.8218
+      "mae_val": 53515.42,
+      "mae_val_std_seeds": 452.55,
+      "rmse_val": 81873.15,
+      "r2_val": 0.7468
     },
     {
       "k": 29,
-      "mae_val": 52000.89,
-      "mae_val_std_seeds": 542.6,
-      "rmse_val": 72625.54,
-      "r2_val": 0.8276
+      "mae_val": 53674.81,
+      "mae_val_std_seeds": 566.8,
+      "rmse_val": 82459.25,
+      "r2_val": 0.7432
     },
     {
       "k": 30,
-      "mae_val": 51950.63,
-      "mae_val_std_seeds": 350.75,
-      "rmse_val": 73120.07,
-      "r2_val": 0.8253
+      "mae_val": 53260.33,
+      "mae_val_std_seeds": 777.59,
+      "rmse_val": 82229.64,
+      "r2_val": 0.7445
     },
     {
       "k": 31,
-      "mae_val": 52025.74,
-      "mae_val_std_seeds": 528.67,
-      "rmse_val": 73523.15,
-      "r2_val": 0.8233
+      "mae_val": 53179.79,
+      "mae_val_std_seeds": 638.84,
+      "rmse_val": 82037.34,
+      "r2_val": 0.7458
     },
     {
       "k": 32,
-      "mae_val": 51704.13,
-      "mae_val_std_seeds": 751.06,
-      "rmse_val": 72989.83,
-      "r2_val": 0.8259
+      "mae_val": 53447.08,
+      "mae_val_std_seeds": 684.86,
+      "rmse_val": 82272.48,
+      "r2_val": 0.7443
     },
     {
       "k": 33,
-      "mae_val": 52522.8,
-      "mae_val_std_seeds": 600.62,
-      "rmse_val": 74394.95,
-      "r2_val": 0.8191
+      "mae_val": 52841.36,
+      "mae_val_std_seeds": 106.37,
+      "rmse_val": 80818.26,
+      "r2_val": 0.7533
     },
     {
       "k": 34,
-      "mae_val": 52522.42,
-      "mae_val_std_seeds": 552.4,
-      "rmse_val": 74182.97,
-      "r2_val": 0.8202
+      "mae_val": 53470.95,
+      "mae_val_std_seeds": 513.58,
+      "rmse_val": 81874.29,
+      "r2_val": 0.7468
     },
     {
       "k": 35,
-      "mae_val": 52328.28,
-      "mae_val_std_seeds": 334.47,
-      "rmse_val": 74292.76,
-      "r2_val": 0.8196
+      "mae_val": 53128.94,
+      "mae_val_std_seeds": 375.66,
+      "rmse_val": 81862.5,
+      "r2_val": 0.7469
     },
     {
       "k": 36,
-      "mae_val": 52333.84,
-      "mae_val_std_seeds": 826.8,
-      "rmse_val": 74233.53,
-      "r2_val": 0.8199
+      "mae_val": 53333.32,
+      "mae_val_std_seeds": 333.52,
+      "rmse_val": 81448.25,
+      "r2_val": 0.7494
     },
     {
       "k": 37,
-      "mae_val": 52385.45,
-      "mae_val_std_seeds": 613.3,
-      "rmse_val": 74329.38,
-      "r2_val": 0.8194
+      "mae_val": 53596.76,
+      "mae_val_std_seeds": 586.79,
+      "rmse_val": 84882.39,
+      "r2_val": 0.7277
     },
     {
       "k": 38,
-      "mae_val": 52180.07,
-      "mae_val_std_seeds": 595.64,
-      "rmse_val": 74367.96,
-      "r2_val": 0.8193
+      "mae_val": 53429.42,
+      "mae_val_std_seeds": 431.82,
+      "rmse_val": 84487.44,
+      "r2_val": 0.7304
     },
     {
       "k": 39,
-      "mae_val": 52447.07,
-      "mae_val_std_seeds": 503.61,
-      "rmse_val": 74482.37,
-      "r2_val": 0.8187
+      "mae_val": 53408.51,
+      "mae_val_std_seeds": 652.04,
+      "rmse_val": 84301.22,
+      "r2_val": 0.7315
     },
     {
       "k": 40,
-      "mae_val": 51599.01,
-      "mae_val_std_seeds": 598.86,
-      "rmse_val": 73425.13,
-      "r2_val": 0.8238
+      "mae_val": 53064.28,
+      "mae_val_std_seeds": 591.18,
+      "rmse_val": 83980.27,
+      "r2_val": 0.7335
     },
     {
       "k": 41,
-      "mae_val": 52283.41,
-      "mae_val_std_seeds": 273.43,
-      "rmse_val": 74516.67,
-      "r2_val": 0.8185
+      "mae_val": 53358.74,
+      "mae_val_std_seeds": 714.08,
+      "rmse_val": 84033.75,
+      "r2_val": 0.7332
     }
   ],
   "seleccion_k": {
-    "best_k": 20,
+    "best_k": 33,
     "candidatas_usadas": [
       "amoblado",
       "estacionamientos",
-      "gastos_comunes",
-      "banos",
-      "antiguedad_anos",
-      "precio_m2_sector_departamento",
-      "rank_nac",
       "piso_unidad",
-      "piscina",
+      "precio_m2_sector_departamento",
+      "banos",
+      "gastos_comunes",
+      "rank_nac",
+      "antiguedad_anos",
       "distancia_centro_concepcion_m",
+      "bodegas",
+      "piscina",
       "superficie_util_m2",
-      "superficie_total_m2",
-      "ratio_total_util",
-      "pob_rsh_uv",
-      "cantidad_paraderos",
       "distancia_centro_comuna_m",
-      "cantidad_colegios",
-      "p_urbano",
+      "superficie_total_m2",
       "ascensor",
-      "tiene_comparables_cercanos"
+      "ratio_total_util",
+      "p_urbano",
+      "pob_rsh_uv",
+      "nivel_barrio",
+      "hog_uv",
+      "cantidad_colegios",
+      "condominio_cerrado",
+      "cantidad_supermercados",
+      "tiene_comparables_cercanos",
+      "cantidad_jardines_infantiles",
+      "cantidad_paraderos",
+      "estacionamiento_visitas",
+      "conserjeria",
+      "cantidad_centros_comerciales",
+      "cantidad_plazas",
+      "cantidad_farmacias",
+      "cantidad_clinicas",
+      "c_ig_com"
     ]
   },
   "correlacion_final": {
-    "features_eliminadas": [],
+    "features_eliminadas": [
+      "hog_uv"
+    ],
     "features_mantenidas": [
       "amoblado",
       "estacionamientos",
-      "gastos_comunes",
-      "banos",
-      "antiguedad_anos",
-      "precio_m2_sector_departamento",
-      "rank_nac",
       "piso_unidad",
-      "piscina",
+      "precio_m2_sector_departamento",
+      "banos",
+      "gastos_comunes",
+      "rank_nac",
+      "antiguedad_anos",
       "distancia_centro_concepcion_m",
+      "bodegas",
+      "piscina",
       "superficie_util_m2",
-      "superficie_total_m2",
-      "ratio_total_util",
-      "pob_rsh_uv",
-      "cantidad_paraderos",
       "distancia_centro_comuna_m",
-      "cantidad_colegios",
-      "p_urbano",
+      "superficie_total_m2",
       "ascensor",
-      "tiene_comparables_cercanos"
+      "ratio_total_util",
+      "p_urbano",
+      "pob_rsh_uv",
+      "nivel_barrio",
+      "cantidad_colegios",
+      "condominio_cerrado",
+      "cantidad_supermercados",
+      "tiene_comparables_cercanos",
+      "cantidad_jardines_infantiles",
+      "cantidad_paraderos",
+      "estacionamiento_visitas",
+      "conserjeria",
+      "cantidad_centros_comerciales",
+      "cantidad_plazas",
+      "cantidad_farmacias",
+      "cantidad_clinicas",
+      "c_ig_com"
     ]
   },
   "features_finales": [
     "amoblado",
     "estacionamientos",
-    "gastos_comunes",
-    "banos",
-    "antiguedad_anos",
-    "precio_m2_sector_departamento",
-    "rank_nac",
     "piso_unidad",
-    "piscina",
+    "precio_m2_sector_departamento",
+    "banos",
+    "gastos_comunes",
+    "rank_nac",
+    "antiguedad_anos",
     "distancia_centro_concepcion_m",
+    "bodegas",
+    "piscina",
     "superficie_util_m2",
-    "superficie_total_m2",
-    "ratio_total_util",
-    "pob_rsh_uv",
-    "cantidad_paraderos",
     "distancia_centro_comuna_m",
-    "cantidad_colegios",
-    "p_urbano",
+    "superficie_total_m2",
     "ascensor",
-    "tiene_comparables_cercanos"
+    "ratio_total_util",
+    "p_urbano",
+    "pob_rsh_uv",
+    "nivel_barrio",
+    "cantidad_colegios",
+    "condominio_cerrado",
+    "cantidad_supermercados",
+    "tiene_comparables_cercanos",
+    "cantidad_jardines_infantiles",
+    "cantidad_paraderos",
+    "estacionamiento_visitas",
+    "conserjeria",
+    "cantidad_centros_comerciales",
+    "cantidad_plazas",
+    "cantidad_farmacias",
+    "cantidad_clinicas",
+    "c_ig_com"
   ]
 }

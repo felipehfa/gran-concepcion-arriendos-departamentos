@@ -1,0 +1,137 @@
+"""Contenido de la pestaña 'Cómo funciona': metodología, precisión y advertencias."""
+
+import streamlit as st
+
+
+def render() -> None:
+    st.markdown(
+        """
+<div class="app-card">
+
+### Qué es esto
+
+Este buscador usa un **modelo predictivo** (no una tasación ni un servicio profesional)
+entrenado con avisos de arriendo de departamentos del Gran Concepción, recolectados por un
+scraper propio desde Portal Inmobiliario. El modelo aprende, a partir de las características
+de cada aviso (superficie, dormitorios, baños, comuna, cercanía a servicios, antigüedad,
+amenities, etc.), a estimar cuál **debería** ser el precio de arriendo — y luego compara ese
+precio estimado contra el precio real publicado para detectar si un aviso está por debajo,
+en línea, o por sobre lo esperado.
+
+</div>
+
+<div class="app-card">
+
+### Cantidad de datos usados
+
+El modelo vigente (`v0005_20260712085625_lightgbm_03cb22af`) se entrenó con **1.628 avisos**
+de departamentos en arriendo, divididos en:
+
+- **1.383 avisos** para entrenar el modelo (ajuste + early stopping).
+- **245 avisos** que el modelo nunca vio durante el entrenamiento, usados solo para medir
+  qué tan bien predice (conjunto de test).
+
+Es un dataset acotado a una sola ciudad y a un momento puntual en el tiempo — no es un
+catastro exhaustivo del mercado.
+
+</div>
+
+<div class="app-card">
+
+### Qué tan preciso es (el error del modelo)
+
+Medido sobre los 245 avisos de test (que el modelo no usó para entrenar):
+
+| Métrica | Valor | Qué significa |
+|---|---|---|
+| Error promedio (MAE) | **≈ \\$48.700** | En promedio, la predicción se equivoca por unos \\$48.700 respecto al precio real |
+| Error porcentual (MAPE) | **≈ 8,6%** | En promedio, la predicción se desvía ~8,6% del precio real |
+| R² | **≈ 0,84** | El modelo explica ~84% de la variación de precios entre avisos — queda ~16% sin explicar |
+
+El error **no es parejo en todo el rango de precios**: en departamentos más caros (sobre
+~\\$670.000) el error típico sube a más de \\$85.000, porque hay menos avisos en ese rango para
+aprender de ellos y los precios son más variables. Por eso la calificación de "oportunidad"
+no compara contra un error único, sino contra el error típico de avisos de precio similar
+(ver estratos más abajo).
+
+</div>
+
+<div class="app-card">
+
+### Los estratos (deciles de precio)
+
+Para calibrar cuándo un precio es "raro", los 245 avisos de test se agruparon en **10
+estratos según su precio** (deciles), y para cada estrato se calculó su propio error típico
+(mediana del error y MAD — desviación absoluta mediana, una versión del error típico menos
+sensible a valores extremos que la desviación estándar). Los bordes de precio de cada
+estrato en el modelo vigente son:
+
+`< $390.000` · `$390.000–430.000` · `$430.000–480.000` · `$480.000–500.000` ·
+`$500.000–530.000` · `$530.000–567.000` · `$567.000–600.000` · `$600.000–650.000` ·
+`$650.000–750.000` · `> $750.000`
+
+Cada aviso se compara solo contra el error típico de su propio estrato, no contra un
+promedio general del mercado.
+
+</div>
+
+<div class="app-card">
+
+### Cuándo es "Oportunidad", "Precio de mercado" o "Caro"
+
+Para cada aviso se calcula un **z-score robusto**: qué tan lejos está su error (precio real
+− precio predicho) de la mediana de error de su estrato, medido en unidades de MAD de ese
+mismo estrato. Con eso:
+
+- **Oportunidad**: el precio real está bastante más bajo de lo esperado para avisos
+  similares (z-score robusto menor a −1).
+- **Caro**: el precio real está bastante más alto de lo esperado (z-score robusto mayor a 1).
+- **Precio de mercado**: el precio real está dentro de lo esperado para avisos similares.
+
+La app solo muestra la etiqueta en palabras — a propósito no se expone el número del
+z-score ni el decil, para no dar una falsa sensación de precisión numérica.
+
+</div>
+
+<div class="app-card">
+
+### Qué significa el nivel de confianza
+
+El modelo no es un solo modelo: es un **ensamble de 10 modelos** entrenados con distintas
+semillas aleatorias sobre los mismos datos. El nivel de confianza mide **qué tan de acuerdo
+están esos 10 modelos entre sí** para un aviso en particular (su coeficiente de variación):
+
+- **Alta**: los 10 modelos predicen precios muy parecidos entre sí.
+- **Media**: hay algo de desacuerdo entre los 10 modelos.
+- **Baja**: los 10 modelos predicen precios bastante distintos entre sí — es una señal de
+  que ese aviso tiene una combinación de características poco común en los datos de
+  entrenamiento, así que la predicción es menos confiable.
+
+Confianza alta **no garantiza que la predicción sea correcta** — solo dice que el modelo es
+consistente consigo mismo para ese aviso.
+
+</div>
+
+<div class="app-card">
+
+### ⚠️ Usar con precaución
+
+Este buscador se hizo **solo a modo de prueba y aprendizaje**, no es un servicio de tasación
+ni una recomendación de inversión. Antes de tomar cualquier decisión con esta información,
+ten en cuenta:
+
+- El modelo **no captura ni considera todas las variables** que afectan el precio real de un
+  arriendo: estado de conservación interno, luminosidad, ruido, calidad de terminaciones,
+  vista, estado del edificio/administración, condiciones del contrato, urgencia del
+  arrendador, entre otras cosas que no están en los datos scrapeados.
+- Los datos vienen de avisos publicados — pueden tener errores de tipeo, precios
+  desactualizados, o información incompleta que el scraper no pudo capturar bien.
+- El error típico del modelo (~8,6%, más alto en tramos de precio poco frecuentes) significa
+  que **puede fallar**, incluso en avisos marcados con confianza alta.
+- Revisa siempre la publicación original y otras variables no capturadas por el modelo antes
+  de sacar conclusiones sobre un aviso puntual.
+
+</div>
+        """,
+        unsafe_allow_html=True,
+    )

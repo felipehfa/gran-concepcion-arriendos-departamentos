@@ -17,10 +17,17 @@ El proyecto cubre cinco etapas encadenadas:
 5. **Producción** (`05_modelo_produccion/`): pipeline separado, re-ejecutable vía cron, que
    entrena y versiona un modelo de producción, scrapea avisos nuevos de forma incremental,
    y genera predicciones + etiquetas sobre una base de datos propia. Ver sección 12.
+6. **Visualización** (`06_visualizacion/`): dashboard Streamlit que lee directo de
+   `produccion_gran_concepcion.db` (sin escribir en ella) y muestra los avisos con predicción
+   como tarjetas filtrables + mapa, para explorar oportunidades sin tocar SQL. Ver sección 14.
 
-> El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers sí
-> recolectan casas, pero la etapa de ingeniería de variables filtra y trabaja solo con
-> `tipo_propiedad = "departamento"`.
+> El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers de
+> **investigación** (`01_obtener_datos/`) sí recolectan casas, pero la etapa de ingeniería de
+> variables filtra y trabaja solo con `tipo_propiedad = "departamento"`. El scraper de grilla de
+> **producción** (`05_modelo_produccion/01_scraper_grilla_incremental.py`) va un paso más allá y
+> directamente **no recorre casas** (`TIPOS_PROPIEDAD_PRODUCCION = ["departamento"]`), ya que el
+> resto del pipeline de producción las descartaría de todas formas — evita gastar presupuesto de
+> scraping en avisos que nunca generan features ni predicción (ver sección 13).
 
 ---
 
@@ -54,6 +61,10 @@ El proyecto cubre cinco etapas encadenadas:
   03_vulnerabilidad_produccion.py                → columnas de vulnerabilidad en `avisos_detalle`
   04_ingenieria_variables_produccion.py          → features de avisos nuevos (contra referencia histórica)
   05_prediccion.py                               → tabla `predicciones` (precio + etiqueta + confianza)
+        │  (produccion_gran_concepcion.db, solo lectura desde acá en adelante)
+        ▼
+06_visualizacion/       → dashboard Streamlit, ver sección 14
+  app.py                → tarjetas filtrables + mapa (st.tabs: Buscador / Cómo funciona)
 ```
 
 Cada script de cada etapa ancla sus rutas de entrada/salida a la ubicación del propio archivo
@@ -214,6 +225,38 @@ fila.
   usando `avisos.banos` (grilla, con un regex distinto que nunca tuvo este problema) como
   fuente confiable. El feature `banos` que usa el modelo siempre vino de `avisos.banos`
   (grilla), así que ningún modelo entrenado quedó afectado por este bug.
+- **Bug corregido: `gastos_comunes` perdía el separador de miles chileno** (`"82.000"` se
+  interpretaba como `82.0` en vez de `82000.0`) — afectaba 1411 de 1956 avisos del histórico
+  (72%). La causa: `float()` directo sobre el texto crudo, sin manejar el punto como separador
+  de miles. Corregido en `RE_GASTOS_COMUNES`/`_a_gastos_comunes()`
+  (`05_modelo_produccion/02_scraper_detalle_incremental.py`), que ahora distingue tres casos
+  según el texto crudo:
+  - **con punto** (`"N.NNN"`): separador de miles real → se elimina y se convierte
+    (`"82.000"` → `82000.0`).
+  - **dígito suelto sin punto y < 1.000** (ej. `"1"`, `"10"`): no es un monto real — es un
+    **placeholder de "gastos comunes incluidos en el arriendo"** que el sitio muestra cuando el
+    campo no puede quedar vacío (confirmado contra el HTML en vivo: la tabla de características
+    dice "1 CLP" mientras la descripción del aviso dice textualmente "Gastos comunes
+    incluidos"). Se mapea a `0.0` (mismo tratamiento que un `$0` explícito), sin agregar una
+    columna booleana aparte — la distinción no cambia nada para el modelo (carga mensual
+    adicional = cero en ambos casos) y siempre se puede reconstruir desde el texto crudo si hace
+    falta para otro fin.
+  - **sin punto y ≥ 500.000** (visto una vez en 1766 avisos, ej. `"1.111.111"`): outlier
+    implausible — se descarta a `NULL` en vez de adivinar una transformación.
+
+  De paso, se agregó un **fallback de extracción** (`RE_GASTOS_COMUNES_RESUMEN`): el campo
+  también aparece en la insignia de resumen superior de la página ("Gastos comunes desde $X"),
+  formato que el regex original nunca lograba matchear por la palabra "desde" — se usa como
+  respaldo cuando la tabla de características no trae el dato. Verificado en vivo sobre los 190
+  avisos históricos con `gastos_comunes NULL`: **102 (54%) sí tenían el dato en el resumen** y
+  se recuperaron; los 88 restantes son ausencia genuina (52 de ellos son `casa`, que en general
+  no reportan gastos comunes en ninguna parte de la página — consistente con que "gastos
+  comunes" es un concepto de edificios/condominios).
+
+  El histórico (`avisos_gran_concepcion.db`) se corrigió con un backfill de una sola vez
+  (backup previo vía `.bak-pre-backfill-gastos-comunes`), y `03_ingenieria_variables/01_ingenieria_variables.py`
+  + `04_modelamiento/01_xgboost.py`/`02_lightgbm.py` se re-corrieron sobre los datos limpios
+  (ver sección 13).
 
 ### 3.3. Limpieza y conversión de datos
 
@@ -487,22 +530,32 @@ gran-concepcion-rentals/
 │       ├── random_forest_regression_precio.pkl
 │       └── random_forest_regression_precio_metrics.json
 │
-└── 05_modelo_produccion/          # pipeline de producción, ver sección 12
-    ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
-    ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
-    ├── 01_scraper_grilla_incremental.py
-    ├── 02_scraper_detalle_incremental.py
-    ├── 03_vulnerabilidad_produccion.py
-    ├── 04_ingenieria_variables_produccion.py
-    ├── 05_prediccion.py
-    ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
-    ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
-    └── entrenamiento/
-        ├── 01_entrenar_modelo_produccion.py
-        ├── version_modelo.json                  # contador + historial de versiones
-        └── versiones/{version}/
-            ├── modelo_produccion.pkl
-            └── parametros_produccion.json
+├── 05_modelo_produccion/          # pipeline de producción, ver sección 12
+│   ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
+│   ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
+│   ├── 01_scraper_grilla_incremental.py
+│   ├── 02_scraper_detalle_incremental.py
+│   ├── 03_vulnerabilidad_produccion.py
+│   ├── 04_ingenieria_variables_produccion.py
+│   ├── 05_prediccion.py
+│   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
+│   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
+│   └── entrenamiento/
+│       ├── 01_entrenar_modelo_produccion.py
+│       ├── version_modelo.json                  # contador + historial de versiones
+│       └── versiones/{version}/
+│           ├── modelo_produccion.pkl
+│           └── parametros_produccion.json
+│
+└── 06_visualizacion/               # dashboard Streamlit, ver sección 14
+    ├── app.py                                   # entrypoint: st.tabs (Buscador / Cómo funciona)
+    ├── data.py                                  # query + join + estandarización de precio
+    ├── filters.py                               # sidebar de filtros + lógica de filtrado
+    ├── components.py                            # tarjetas de aviso + mapa folium
+    ├── explicacion.py                           # contenido de la pestaña "Cómo funciona"
+    ├── styles.py                                # paleta de colores + CSS compartido
+    ├── requirements.txt
+    └── .streamlit/config.toml                   # tema forzado a claro
 ```
 
 ---
@@ -620,8 +673,13 @@ vía `importlib`, sin duplicar lógica de parsing/extracción):
 2. **`02_scraper_detalle_incremental.py`** — visita avisos nuevos sin detalle (vía
    `sd.obtener_detalle_aviso`, ruta `requests` de `01_obtener_datos/02_scraper_detalle.py`, sin
    navegador), y además **re-chequea** avisos `activo` con más de `DIAS_MIN_ENTRE_RECHEQUEOS = 7`
-   días desde su último chequeo (batch de `MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50`, los más
-   antiguos primero). Extrae `estado_publicacion` del mismo JSON embebido que ya se usa para los
+   días desde su último chequeo, o que nunca se chequearon (`fecha_ultimo_chequeo_estado IS
+   NULL` — ej. avisos recién migrados del histórico, ver sección 13), en batches de
+   `MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200`. Los nunca-chequeados van primero (son los más
+   urgentes: nunca se confirmó que sigan activos) y después los vencidos por antigüedad de más
+   antiguo a más reciente — SQLite ordena `NULL` antes que cualquier fecha en `ORDER BY ... ASC`,
+   así que un único `ORDER BY fecha_ultimo_chequeo_estado ASC` alcanza para ambos criterios sin
+   necesitar un `CASE` aparte. Extrae `estado_publicacion` del mismo JSON embebido que ya se usa para los
    puntos de interés (busca el componente `item_status_message`/`item_status_short_description_message`
    dentro de `components.head`/`components.short_description`; si no aparece, el aviso está
    activo). El guardado usa **UPSERT** (no `INSERT OR REPLACE`) para que un re-chequeo nunca
@@ -631,17 +689,20 @@ vía `importlib`, sin duplicar lógica de parsing/extracción):
    consecutivos, el aviso se marca `estado_publicacion = 'no_disponible'` y sale de la cola de
    pendientes (un éxito antes de llegar al umbral resetea el contador a 0).
 3. **`03_vulnerabilidad_produccion.py`** — cruce punto-en-polígono contra el mismo shapefile
-   IGVUST, resuelto directo a columnas de `avisos_detalle` (no a tablas de referencia
-   separadas). Solo procesa avisos con coordenadas y `uv_rsh` todavía `NULL` (incremental).
-4. **`04_ingenieria_variables_produccion.py`** — calcula las 20 features del modelo para avisos
-   nuevos, pero **sin recalcular nada en modo batch** (a diferencia del pipeline de
+   IGVUST, resuelto directo a columnas de `avisos_detalle` (`uv_rsh`, `rank_nac`, `pob_rsh_uv`,
+   `p_urbano`, `c_ig_com`) — no a tablas de referencia separadas. Solo procesa avisos con
+   coordenadas y `uv_rsh` todavía `NULL` (incremental).
+4. **`04_ingenieria_variables_produccion.py`** — calcula las features seleccionadas del modelo
+   para avisos nuevos (32 actualmente, leídas dinámicamente desde `selected_features.csv`; ver
+   sección 13), pero **sin recalcular nada en modo batch** (a diferencia del pipeline de
    investigación): compara cada aviso contra una **población de referencia fija**
    (`datos_ingenieria_variables.csv` + coordenadas/comuna recuperadas con un `SELECT` de solo
    lectura contra la base original) vía `BallTree` para `precio_m2_sector_departamento` y la
    imputación de `antiguedad_anos`, y reutiliza los modelos de imputación de superficie ya
    entrenados (`aplicar_modelo_guardado`) sin reentrenar nada.
 5. **`05_prediccion.py`** — predice con el ensamble vigente, convierte el precio real del aviso
-   a CLP (reutiliza `convertir_precios_uf_a_clp` si `moneda='UF'`), aplica la calibración
+   a CLP (reutiliza `convertir_precios_uf_a_clp`: UF con el valor del día vía mindicador.cl,
+   US$ con una tasa fija), aplica la calibración
    guardada en la Parte 1 para calcular `z_robusto`/etiqueta/confianza, e inserta en
    `predicciones` vía UPSERT sobre `(id_aviso, version_modelo)`.
 
@@ -671,10 +732,6 @@ Pensado para cron, ej.:
 
 ### 12.4. Notas y limitaciones conocidas de esta sección
 
-- `gastos_comunes` en producción replica a propósito el mismo quirk del pipeline de
-  investigación (pierde el separador de miles chileno: "$120.000" → `120.0`, no `120000.0`),
-  para que el dato sea comparable con el histórico que ya vio el modelo. Corregirlo requiere
-  hacerlo en ambos lados a la vez y reentrenar.
 - La población de referencia de la etapa de variables (comparables de precio/m² e imputación de
   antigüedad) usa **solo** el dataset histórico de investigación, no los avisos de producción ya
   procesados — más simple y estable, a costa de no reflejar aún datos más recientes del mercado.
@@ -684,3 +741,258 @@ Pensado para cron, ej.:
   campos.
 - El pipeline de producción solo predice `tipo_propiedad='departamento'` (igual que el modelo);
   las casas se scrapean pero nunca se puntúan.
+
+---
+
+## 13. Historial de correcciones y mejoras (sesión de mantenimiento, jul-2026)
+
+Sesión enfocada en tres frentes: poblar la base de producción con el histórico de
+investigación, corregir un bug de escala en `gastos_comunes` (extracción → base → modelo →
+producción), y ajustar el ritmo del re-chequeo. Quedan documentados acá los cambios que no
+encajan en las secciones anteriores (que describen el estado ya corregido del código) por ser
+más eventos puntuales que arquitectura permanente.
+
+### 13.1. Mejora: producción solo scrapea departamentos
+
+Ver nota en la sección 1. `01_scraper_grilla_incremental.py` ahora usa
+`TIPOS_PROPIEDAD_PRODUCCION = ["departamento"]` como default (configurable, no hardcodeado) en
+vez de `sg.TIPOS_PROPIEDAD` (`["casa", "departamento"]`) — evita gastar presupuesto de scraping
+en avisos que el resto del pipeline de producción descartaría de todas formas.
+`02_scraper_detalle_incremental.py` no necesitó cambios (no filtra por tipo, trabaja directo
+sobre lo que ya está en `avisos`).
+
+### 13.2. Mejora: migración del histórico de investigación a producción
+
+Nuevo script de una sola vez, `05_modelo_produccion/migracion_historico_a_produccion.py` (no
+forma parte del orquestador). Migró **1628 avisos** (`departamento`/`arriendo`) desde
+`avisos_gran_concepcion.db` — exactamente los IDs de `datos_ingenieria_variables.csv` (el
+dataset que entrenó el modelo), no los ~1956 avisos crudos completos, ya que las ~298 casas del
+histórico nunca generarían features ni predicción en producción. Quedan con
+`estado_publicacion='activo'` y `fecha_ultimo_chequeo_estado=NULL` (califican de inmediato para
+el primer re-chequeo real). Colisiones: se conserva siempre la fila ya existente en producción,
+nunca se sobreescribe con la versión del histórico. Backup previo
+(`produccion_gran_concepcion.db.bak-pre-migracion-historico`), idempotente.
+
+**Incidente durante la migración**: la primera corrida reportó 1628 migrados pero la base
+terminó con solo 1606 avisos nuevos — 25 filas se perdieron de forma silenciosa (sin excepción,
+`PRAGMA integrity_check` seguía en `ok`). Causa más probable: el repo vive dentro de una carpeta
+sincronizada por Google Drive, y la migración hizo ~1628 commits SQLite individuales a lo largo
+de ~3 minutos — ventana larga donde el sincronizador pudo interferir con el archivo. Al ser el
+script idempotente, una segunda corrida completó exactamente las 25 filas faltantes sin
+duplicar nada. **Recomendación para scripts futuros** que hagan muchas escrituras seguidas a
+estas bases: verificar conteos después de corridas largas, dado que el repo vive en una carpeta
+sincronizada.
+
+### 13.3. Bug corregido: escala de `gastos_comunes` (ver también sección 3.2)
+
+Backfill de una sola vez sobre `avisos_gran_concepcion.db` (backup
+`.bak-pre-backfill-gastos-comunes`), reclasificando las 1956 filas de `avisos_detalle` según el
+texto crudo:
+
+| Categoría | Filas | Acción |
+|---|---:|---|
+| Bug de escala corregido (`"N.NNN"` → valor real) | 1411 | `×1000` efectivo |
+| Placeholder "incluido" → `0` | 45 | incluye 3 casos fuera del rango 1-14 que la inspección manual no había detectado (`"90"`, `"60"`, `"10"`) |
+| Ya era `0` explícito | 392 | sin cambios |
+| NULL sin resolver (ausencia genuina) | 88 | se dejan `NULL`, no se fuerzan a `0` |
+| No parseable (basura de extracción: `","`, `"."`) | 18 | sin cambios, fuera de alcance |
+| Outlier sin punto ($35.000, `MLC-2055388319`) | 1 | sin cambios, señalado |
+| Outlier implausible (\$1.111.111, `MLC-4068110790`) | 1 | descartado a `NULL` (supera el techo de sanidad de \$500.000) |
+
+De los 190 `NULL` originales, **102 (54%) se resolvieron** vía el fallback de extracción (ver
+sección 3.2) verificado en vivo contra el sitio real.
+
+`produccion_gran_concepcion.db` se corrigió por separado con el mismo criterio: los 1628 avisos
+migrados ya venían limpios (heredan el texto ya corregido del histórico), y los 3 avisos
+preexistentes (scrapeados antes del fix del scraper) se corrigieron directo, respaldados en una
+verificación en vivo contra el HTML real.
+
+### 13.4. Reentrenamiento con datos corregidos
+
+Dataset regenerado desde cero (`01_ingenieria_variables.py` sobre la base ya corregida, no un
+parche del CSV): **1628 filas × 44 columnas** (igual tamaño que antes — la corrección de escala
+no elimina filas, solo corrige valores). Selección de variables re-corrida:
+**32 features finales** (antes 30) — nuevas: `c_ig_com`, `cantidad_clinicas`,
+`cantidad_centros_comerciales`; sacada: `cantidad_universidades`. `gastos_comunes` se mantuvo
+entre las más estables (`stability_score=0.97`, top 6).
+
+Métricas de test, antes/después de la corrección:
+
+| Métrica | XGBoost antes | XGBoost después | LightGBM antes | LightGBM después |
+|---|---:|---:|---:|---:|
+| MAE | 50.981 | 49.237 | 50.058 | 48.901 |
+| RMSE | 77.646 | 74.455 | 74.359 | 73.890 |
+| R² | 0.8250 | 0.8391 | 0.8395 | 0.8416 |
+| MAPE | 8.94% | 8.65% | 8.74% | 8.57% |
+| MdAPE | 6.85% | 6.50% | 6.67% | 6.16% |
+
+Ambos algoritmos mejoraron en las cinco métricas de test. `seleccionar_algoritmo.py` (criterio
+ponderado 50% MAE + 50% RMSE test) sigue eligiendo **LightGBM** como antes, pero el margen se
+achicó de 3.03% a 0.72% relativo — XGBoost cerró bastante la brecha con datos corregidos.
+
+> Esta corrida de investigación (LightGBM, 32 features) es distinta de la comparación
+> XGBoost/LightGBM/Random Forest documentada en las secciones 5-7 (que describen una corrida
+> anterior, con 20 features y datos sin corregir, y donde XGBoost fue elegido editorialmente por
+> menor asimetría/kurtosis de residuos). `seleccionar_algoritmo.py` es un mecanismo aparte,
+> específico para decidir qué algoritmo entrena el modelo de **producción** — no reemplaza esa
+> decisión editorial de investigación, que no se ha revisitado con los datos corregidos.
+
+### 13.5. Producción: pipeline extendido para 3 features nuevas + reentrenamiento
+
+El modelo ganador (LightGBM, 32 features) usa 3 features que el pipeline de producción no
+calculaba. Se extendió:
+- **`db.py`**: nueva columna `avisos_detalle.c_ig_com` (migración `ALTER TABLE` para bases ya
+  existentes, mismo patrón que `intentos_fallidos_detalle`).
+- **`03_vulnerabilidad_produccion.py`**: ahora también resuelve `c_ig_com` desde el shapefile
+  IGVUST (antes solo `uv_rsh`/`rank_nac`/`pob_rsh_uv`/`p_urbano`).
+- **`04_ingenieria_variables_produccion.py`**: agregadas `cantidad_centros_comerciales` y
+  `cantidad_clinicas` (mismo patrón que los demás conteos de POI) y `c_ig_com` (mismo fallback
+  por comuna que ya usan `rank_nac`/`p_urbano`/`pob_rsh_uv`).
+
+Modelo de producción reentrenado sobre datos corregidos: nueva versión
+`v0005_..._lightgbm_...` (algoritmo ganador de la sección 13.4). Las 3 predicciones ya
+existentes en `predicciones` (hechas con el modelo y el `gastos_comunes` sin corregir) se
+recalcularon con la versión nueva **sin pisar las anteriores** — `UNIQUE(id_aviso,
+version_modelo)` permite que ambas convivan, tal como está pensado el esquema.
+
+---
+
+## 14. Visualización (`06_visualizacion/`)
+
+Dashboard Streamlit de solo lectura sobre `produccion_gran_concepcion.db`: **nunca escribe**
+en las tablas de negocio (`avisos`, `avisos_detalle`, `predicciones`) — la única escritura que
+hace es indirecta, vía la caché compartida `valores_uf` (ver 14.2), la misma tabla que ya usa
+`05_prediccion.py`. Hecho **a modo de prueba y aprendizaje**, no es un servicio de tasación.
+
+### 14.1. Estructura de archivos
+
+| Archivo | Responsabilidad |
+|---|---|
+| `app.py` | Entrypoint: `st.set_page_config`, `st.tabs(["🏠 Buscador", "ℹ️ Cómo funciona"])`, orden de resultados |
+| `data.py` | Query SQL (join + predicción más reciente) + estandarización de precio, cacheada con `st.cache_data` |
+| `filters.py` | Sidebar de filtros (precio, dormitorios, baños, comuna, superficie, etiqueta, confianza, amenities, estado) + lógica de filtrado |
+| `components.py` | Tarjeta de aviso (HTML) y mapa (`folium` + `streamlit-folium`) |
+| `explicacion.py` | Contenido de la pestaña "Cómo funciona" (metodología, error del modelo, deciles, advertencias) |
+| `styles.py` | Paleta de colores + CSS inyectado (tarjetas, badges, tema) |
+| `.streamlit/config.toml` | Tema forzado a claro (ver 14.4) |
+
+Las rutas a `produccion_gran_concepcion.db` y a `03_ingenieria_variables/01_ingenieria_variables.py`
+se resuelven con `Path(__file__).resolve().parent.parent` en `data.py`, no hardcodeadas, para
+que `streamlit run app.py` funcione sin importar desde qué directorio se invoque.
+
+### 14.2. De dónde salen los datos que se muestran
+
+`data.py` hace `INNER JOIN` entre `avisos`, `avisos_detalle` y `predicciones` — un aviso sin
+predicción simplemente no aparece, porque la etiqueta/confianza/z_robusto son el centro del
+diseño (no tiene sentido mostrar una tarjeta sin ellas). En la práctica esto significa que el
+dashboard solo muestra una fracción de `avisos` en un momento dado: el resto son avisos que el
+orquestador todavía no llegó a puntuar.
+
+**Predicción "más reciente" por aviso**: en vez de filtrar por el `version_actual` fijo de
+`entrenamiento/version_modelo.json`, usa `ROW_NUMBER() OVER (PARTITION BY id_aviso ORDER BY
+fecha_prediccion DESC)` — la predicción con fecha más nueva de cada aviso, sin importar su
+versión. Es más robusto ante un rollout parcial: si un aviso fue puntuado con la versión
+anterior y todavía no se ha vuelto a puntuar con la vigente, igual se muestra (con su
+predicción más nueva disponible) en vez de desaparecer del dashboard.
+
+**Estandarización de precio**: reutiliza `convertir_precios_uf_a_clp` y
+`PRECIO_MAXIMO_ARRIENDO_CLP`/`filtrar_precio_maximo` de
+`03_ingenieria_variables/01_ingenieria_variables.py` vía el mismo truco de import dinámico que
+usa `05_prediccion.py` (el directorio empieza con dígitos, no es importable como paquete
+normal) — así el precio que se muestra en cada tarjeta es *literalmente* el mismo
+`precio_clp` que vio el modelo al calcular `z_robusto`, no una reimplementación aparte que se
+pueda desincronizar. Esto de paso significó extender esa función compartida (beneficiando
+también a entrenamiento y producción, no solo al dashboard):
+- **Conversión US$ → CLP con tasa fija** (`TASA_USD_CLP = 930`): antes la función solo
+  convertía UF, y trataba cualquier otra moneda como si ya fuera CLP. Con el único aviso real
+  en US$ de la base (`precio=350000`), eso daba `$325.500.000/mes` — implausible. Se optó por
+  agregar la tasa fija (no vale la pena ir a buscar el valor histórico por fecha a una API para
+  un puñado de avisos) **y además** aplicar el mismo tope de precio máximo que ya usaba
+  entrenamiento (`PRECIO_MAXIMO_ARRIENDO_CLP = 8.000.000`, antes un default hardcodeado dentro
+  de `filtrar_precio_maximo`, ahora una constante nombrada) también en `05_prediccion.py`
+  (avisos sobre el tope simplemente no generan predicción) y en `data.py` (defensa adicional en
+  la vista).
+- La tabla de caché `valores_uf` (fecha → valor UF, consultado a `mindicador.cl`) no existía
+  todavía en `produccion_gran_concepcion.db` cuando se construyó el dashboard — la creó y
+  pobló la primera corrida real, mismo mecanismo que ya usaba `05_prediccion.py`.
+
+**`gastos_comunes`**: se aplica el mismo criterio de imputación que usa el pipeline al armar
+el feature del modelo (`fillna(0)`, ver secciones 3.3/12.2) — un aviso sin gastos comunes
+informados se muestra como `$0`, no como `nan`. La columna cruda de `avisos_detalle` sí puede
+tener `NULL` genuino (no se scrapeó/no se informó); mostrarlo tal cual sin imputar producía
+literalmente el string `"nan"` en la tarjeta.
+
+**Conexión SQLite con `timeout=30`** (en vez del default de 5s) en `data.py` y en la función
+compartida de conversión de moneda: el orquestador puede estar escribiendo en la misma base en
+paralelo (una fila cada ~0.5s durante la etapa de predicción), y con el timeout default el
+dashboard podía toparse con `sqlite3.OperationalError: database is locked` si alguien lo abría
+justo durante una corrida.
+
+Todo el resultado se cachea con `st.cache_data(ttl=600)` — 10 minutos, ya que la base la
+actualiza el orquestador en segundo plano (vía cron), no en cada request del usuario.
+
+### 14.3. Filtros y diseño visual
+
+Sidebar con precio/superficie (sliders de rango), dormitorios/baños (checkboxes con conteo,
+agrupando "4+"), comuna (multiselect), etiqueta del modelo y nivel de confianza (checkboxes,
+todo marcado por defecto), amenities en una sección colapsable, y un filtro de
+`estado_publicacion` (activo por defecto, con opción de incluir pausados). Botón "Limpiar
+filtros" vía `st.session_state` (un callback que resetea las keys a sus valores por defecto
+antes del siguiente render).
+
+**Tema forzado a claro** (`.streamlit/config.toml`, `theme.base = "light"`): el diseño usa una
+paleta fija (fondo gris claro, tarjetas blancas, semáforo verde/gris/rojo para las etiquetas) —
+sin forzar el tema, Streamlit adapta colores al modo oscuro del navegador/SO, lo que dejaba el
+título del header en blanco sobre fondo claro (ilegible) y las tarjetas sin fondo/borde
+visible. Se combinó con `!important` en los colores de texto de `styles.py` como defensa
+adicional, ya que Streamlit reinyecta su propio color de tema con selectores más específicos
+que los del CSS propio.
+
+Las tarjetas son un único `st.markdown(unsafe_allow_html=True)` por aviso, envuelto en un
+`<div class="app-card">` propio (fondo blanco, sombra, radio, margen) — no
+`st.container(border=True)`: su borde por defecto es casi invisible (`rgba(…, 0.2)`) y no trae
+fondo propio, así que no se distinguía como "tarjeta" contra el fondo gris. El mismo tratamiento
+visual (`app-card`) se le dio también al bloque completo de filtros del sidebar, para que use
+el mismo lenguaje visual que las tarjetas de aviso.
+
+### 14.4. Pestañas en vez de multipágina
+
+La pestaña "Cómo funciona" (metodología, error del modelo, deciles, advertencias de uso — con
+cifras reales tomadas de `parametros_produccion.json`/`lightgbm_regression_precio_metrics.json`
+del modelo vigente) se implementó primero como una página aparte del sistema clásico de
+multipágina de Streamlit (`pages/`), pero **`st.page_link()` con ese mecanismo tiene un bug
+real** en la versión instalada (1.58): itera sobre todas las páginas registradas leyendo
+`page_data["url_pathname"]` sin `.get()`, y esa clave es opcional (`NotRequired`) para páginas
+descubiertas vía la carpeta `pages/` clásica — solo la completa la API moderna
+`st.navigation`/`st.Page`. Resultado: `KeyError: 'url_pathname'` al hacer clic en cualquier
+link generado así.
+
+Se probó migrar a `st.navigation`/`st.Page` (que sí completa esa clave), pero introdujo otro
+problema: con `st.navigation`, Streamlit ejecuta un router aparte y la pestaña quedaba en
+blanco/rota en la práctica. Se optó, en cambio, por la solución más simple y sin las
+dependencias frágiles de routing entre páginas: **una sola página con `st.tabs`** — ambas
+vistas (`app.py` y `explicacion.py`) se renderizan en el mismo script run, sin URLs ni
+navegación de por medio.
+
+### 14.5. Cómo correrlo
+
+```bash
+pip install streamlit folium streamlit-folium pandas
+cd 06_visualizacion
+streamlit run app.py
+```
+
+Requiere que `05_modelo_produccion/produccion_gran_concepcion.db` ya exista con al menos un
+aviso en `predicciones` (ver sección 12) — si la base está vacía o el orquestador todavía no
+corrió la etapa de predicción, el dashboard muestra un aviso de "sin datos" en vez de una
+tabla vacía silenciosa.
+
+### 14.6. Limitaciones conocidas
+
+- Solo muestra avisos ya puntuados por el orquestador — no es un catastro completo de
+  `avisos`, y el conteo de resultados fluctúa corrida a corrida según cuánto haya avanzado la
+  etapa de predicción.
+- La conversión US$ → CLP usa una tasa fija (`930`), no un valor de mercado por fecha — pensada
+  para el puñado de avisos en esa moneda visto hasta ahora, no para volúmenes grandes.
+- No hay autenticación ni control de acceso: pensado para uso local/personal, no para
+  exponerse como servicio público sin revisión adicional.

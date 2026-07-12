@@ -37,7 +37,10 @@ COMUNAS_GRAN_CONCEPCION = [
 TIPOS_PROPIEDAD = ["casa", "departamento"]
 OPERACION = "arriendo"
 
-MAX_PAGINAS_POR_BUSQUEDA = 1000   # tope de seguridad; el corte real es por duplicados o por 404
+MAX_PAGINAS_POR_BUSQUEDA = 1000   # tope de seguridad; el corte real es por páginas vacías o por 404
+MAX_PAGINAS_VACIAS_CONSECUTIVAS = 10   # por combinación comuna×tipo
+MAX_PAGINAS_POR_CORRIDA = 200          # techo global, sumando todas las combinaciones
+MAX_MINUTOS_POR_CORRIDA = 30           # techo global de tiempo
 RESULTADOS_POR_PAGINA = 48        # tamaño real de página del sitio - NO tocar salvo que el sitio cambie esto
 DELAY_MIN = 3.0                   # segundos, entre requests
 DELAY_MAX = 7.0
@@ -295,12 +298,16 @@ def guardar_pagina_en_bd(avisos: list, con: sqlite3.Connection) -> int:
 # ------------------------------------------------------------------
 
 def scrapear_todo(con: sqlite3.Connection, comunas=None, tipos=None,
-                   max_paginas=MAX_PAGINAS_POR_BUSQUEDA) -> dict:
+                   max_paginas_vacias: int = MAX_PAGINAS_VACIAS_CONSECUTIVAS,
+                   max_paginas_corrida: int = MAX_PAGINAS_POR_CORRIDA,
+                   max_minutos_corrida: float = MAX_MINUTOS_POR_CORRIDA) -> dict:
     """
     Recorre comunas x tipos x páginas, guardando cada página de inmediato en
-    la BBDD. Corta una búsqueda apenas una página completa resulte ser 100%
-    avisos que ya existían (asumiendo que lo nuevo tiende a aparecer antes
-    que lo viejo en el orden por defecto del sitio).
+    la BBDD. Corta una búsqueda (comuna×tipo) tras `max_paginas_vacias`
+    páginas consecutivas sin ningún aviso nuevo (asumiendo que lo nuevo
+    tiende a aparecer antes que lo viejo en el orden por defecto del sitio).
+    Además, si la corrida completa supera `max_paginas_corrida` páginas o
+    `max_minutos_corrida` minutos, corta todo de inmediato por presupuesto.
     """
     comunas = comunas or COMUNAS_GRAN_CONCEPCION
     tipos = tipos or TIPOS_PROPIEDAD
@@ -310,51 +317,79 @@ def scrapear_todo(con: sqlite3.Connection, comunas=None, tipos=None,
 
     total_nuevos = 0
     total_vistos = 0
-    cortes_por_duplicado = 0
+    paginas_recorridas = 0
+    motivo_corte = None
+    t0 = time.time()
 
     for comuna in comunas:
-        for tipo in tipos:
-            log.info(f"--- Buscando: {OPERACION} de {tipo} en {comuna} ---")
+        if motivo_corte in ("limite_paginas", "limite_tiempo"):
+            break
 
-            for pagina in range(1, max_paginas + 1):
+        for tipo in tipos:
+            if motivo_corte in ("limite_paginas", "limite_tiempo"):
+                break
+
+            log.info(f"--- Buscando: {OPERACION} de {tipo} en {comuna} ---")
+            paginas_vacias_consecutivas = 0
+            pagina = 1
+
+            while True:
+                if paginas_recorridas >= max_paginas_corrida:
+                    motivo_corte = "limite_paginas"
+                    log.warning(f"Límite de {max_paginas_corrida} páginas por corrida alcanzado. "
+                                f"Corte por presupuesto, no por agotar contenido nuevo.")
+                    break
+
+                if (time.time() - t0) / 60 >= max_minutos_corrida:
+                    motivo_corte = "limite_tiempo"
+                    log.warning(f"Límite de {max_minutos_corrida} minutos por corrida alcanzado. "
+                                f"Corte por presupuesto, no por agotar contenido nuevo.")
+                    break
+
+                if paginas_vacias_consecutivas >= max_paginas_vacias:
+                    log.info(f"  -> {max_paginas_vacias} páginas vacías consecutivas en esta "
+                              f"combinación. Corto esta búsqueda y paso a la siguiente.")
+                    break
+
+                if pagina > MAX_PAGINAS_POR_BUSQUEDA:
+                    break
+
                 url = construir_url(tipo, comuna, pagina)
                 log.info(f"Página {pagina}: {url}")
                 html = obtener_html(url)
+                paginas_recorridas += 1
 
                 if html is None:
                     break  # fin de resultados (404) o error/CAPTCHA
 
                 avisos = parsear_pagina(html, comuna, tipo)
                 if not avisos:
-                    break  # página vacía = fin de resultados
+                    break  # página sin tarjetas = fin de resultados real
 
                 ids_de_la_pagina = [a.id_aviso for a in avisos if a.id_aviso]
-                pagina_totalmente_duplicada = (
-                    len(ids_de_la_pagina) > 0
-                    and all(i in ids_conocidos for i in ids_de_la_pagina)
-                )
-
-                if pagina_totalmente_duplicada:
-                    log.info(f"  -> Página completa ya existía en la BBDD. "
-                              f"Corto esta búsqueda y paso a la siguiente.")
-                    cortes_por_duplicado += 1
-                    break
-
                 nuevos_en_pagina = guardar_pagina_en_bd(avisos, con)
                 ids_conocidos.update(ids_de_la_pagina)  # para que la próxima página compare bien
 
                 total_nuevos += nuevos_en_pagina
                 total_vistos += len(avisos)
 
-                log.info(f"  -> {len(avisos)} avisos vistos, {nuevos_en_pagina} nuevos guardados "
-                          f"(acumulado nuevos: {total_nuevos})")
+                paginas_vacias_consecutivas = 0 if nuevos_en_pagina > 0 else paginas_vacias_consecutivas + 1
 
+                log.info(f"  -> {len(avisos)} avisos vistos, {nuevos_en_pagina} nuevos guardados "
+                          f"(vacías consecutivas: {paginas_vacias_consecutivas}/{max_paginas_vacias})")
+
+                pagina += 1
                 time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+
+    if motivo_corte is None:
+        motivo_corte = "paginas_vacias_consecutivas"
 
     return {
         "total_vistos": total_vistos,
         "total_nuevos": total_nuevos,
-        "cortes_por_duplicado": cortes_por_duplicado,
+        "paginas_recorridas": paginas_recorridas,
+        "motivo_corte": motivo_corte,
+        "duracion_seg": round(time.time() - t0, 1),
     }
 
 
@@ -366,5 +401,7 @@ if __name__ == "__main__":
     log.info(
         f"Corrida completa. Avisos vistos: {resumen['total_vistos']} | "
         f"Nuevos guardados: {resumen['total_nuevos']} | "
-        f"Búsquedas cortadas por duplicado: {resumen['cortes_por_duplicado']}"
+        f"Páginas recorridas: {resumen['paginas_recorridas']} | "
+        f"Motivo de corte: {resumen['motivo_corte']} | "
+        f"Duración: {resumen['duracion_seg']:.1f}s"
     )

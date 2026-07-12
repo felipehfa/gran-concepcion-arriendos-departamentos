@@ -44,6 +44,8 @@ RUTA_SALIDA_CSV_DEFAULT = str(DIRECTORIO_SALIDA / "datos_ingenieria_variables.cs
 RUTA_SALIDA_NIVELES_BARRIO_DEFAULT = str(DIRECTORIO_SALIDA / "niveles_barrio.json")
 
 API_UF_URL = "https://mindicador.cl/api/uf/{fecha}"
+TASA_USD_CLP = 930  # tasa fija: solo hay un puñado de avisos en US$, no justifica ir a buscar el valor por fecha a una API
+PRECIO_MAXIMO_ARRIENDO_CLP = 8_000_000  # sobre este monto ya no es un arriendo real (venta mal clasificada o dato corrupto)
 
 RADIO_TIERRA_M = 6_371_000
 
@@ -376,11 +378,12 @@ def obtener_valor_uf_api(fecha: pd.Timestamp, reintentos: int = 3, espera: float
 def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT) -> pd.DataFrame:
     """
     Crea la columna 'precio_clp': para avisos publicados en CLP la copia tal
-    cual, y para los publicados en UF la convierte usando el valor de la UF
-    de su fecha de publicación (consultando mindicador.cl, con caché en la
-    propia base de datos para no repetir consultas entre corridas). Si a un
+    cual, para los publicados en UF la convierte usando el valor de la UF de
+    su fecha de publicación (consultando mindicador.cl, con caché en la
+    propia base de datos para no repetir consultas entre corridas; si a un
     aviso en UF le falta la fecha de publicación, usa como respaldo el
-    promedio de fechas de todo el dataset.
+    promedio de fechas de todo el dataset), y para los publicados en US$ usa
+    la tasa fija TASA_USD_CLP.
     """
     # Paso 0: asegurar que fecha_publicacion_aprox sea datetime
     df["fecha_publicacion_aprox"] = pd.to_datetime(df["fecha_publicacion_aprox"], errors="coerce")
@@ -396,7 +399,10 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
     fechas_a_verificar = list(set(fechas_unicas) | {fecha_promedio})  # incluye la de respaldo por si se necesita
 
     # Paso 3: revisar primero la caché en la BD; solo consultar la API las fechas que falten ahí
-    con = sqlite3.connect(ruta_bd)
+    # timeout alto: el orquestador escribe en la misma BD en paralelo (una fila
+    # cada ~0.5s durante la etapa de predicción), así que un writer ocasional
+    # no debería tumbar esta lectura/escritura con "database is locked".
+    con = sqlite3.connect(ruta_bd, timeout=30)
     inicializar_tabla_uf(con)
 
     valor_uf_por_fecha = obtener_valores_uf_desde_bd(con, fechas_a_verificar)
@@ -425,10 +431,15 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
         else:
             df.loc[idx, "precio_clp"] = None
 
+    # Paso 5: US$ -> CLP con tasa fija (no fluctúa por fecha como la UF, no
+    # amerita el mismo mecanismo de caché/API)
+    mask_usd = df["moneda"] == "US$"
+    df.loc[mask_usd, "precio_clp"] = df.loc[mask_usd, "precio"] * TASA_USD_CLP
+
     return df
 
 
-def filtrar_precio_maximo(df: pd.DataFrame, precio_maximo: float = 8_000_000) -> pd.DataFrame:
+def filtrar_precio_maximo(df: pd.DataFrame, precio_maximo: float = PRECIO_MAXIMO_ARRIENDO_CLP) -> pd.DataFrame:
     """Descarta avisos con precio_clp por sobre `precio_maximo`: a ese nivel
     ya no son arriendos sino ventas mal clasificadas. Requiere que
     'precio_clp' ya haya sido calculada (ver `convertir_precios_uf_a_clp`)."""

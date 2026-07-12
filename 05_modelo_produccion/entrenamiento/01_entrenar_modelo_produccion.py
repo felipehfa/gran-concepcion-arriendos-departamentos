@@ -1,11 +1,18 @@
 """
 Entrenamiento del modelo de PRODUCCIÓN.
 
-No duplica la lógica de modelamiento: carga `04_modelamiento/01_xgboost.py`
-como módulo (vía importlib, ya que su nombre empieza con dígito) y reutiliza
-sus funciones (optimización de hiperparámetros, bagging, evaluación, SHAP).
+No duplica la lógica de modelamiento: carga como módulo (vía importlib, ya
+que su nombre empieza con dígito) el script de investigación del algoritmo
+GANADOR — `04_modelamiento/01_xgboost.py` o `04_modelamiento/02_lightgbm.py`,
+según lo que haya decidido `seleccionar_algoritmo.py` (Tarea 1) y quedó
+registrado en `algoritmo_seleccionado.json` — y reutiliza sus funciones
+(optimización de hiperparámetros, bagging, evaluación, SHAP). Solo se carga
+y entrena el algoritmo elegido; el otro no se toca, para no duplicar el
+costo de Optuna innecesariamente. Los dos scripts de investigación exponen
+la misma API (mismos nombres de función/constante), así que el resto de este
+script es agnóstico a cuál de los dos se cargó.
 
-Diferencias respecto al script de investigación (04_modelamiento/01_xgboost.py):
+Diferencias respecto al script de investigación:
   - Split 85/15 (train/test) en vez de 70/15/15. El ensamble de bagging
     necesita igualmente un set para early stopping, así que se separa
     internamente un 10% del 85% de train solo para eso (~76.5% train_fit /
@@ -40,22 +47,46 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 # ------------------------------------------------------------------
-# Carga de 04_modelamiento/01_xgboost.py como módulo (nombre empieza con
-# dígito, no se puede hacer un `import` normal).
+# Carga del script de investigación del algoritmo GANADOR (Tarea 1) como
+# módulo (nombre empieza con dígito, no se puede hacer un `import` normal).
 # ------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-XGBOOST_MODULE_PATH = REPO_ROOT / "04_modelamiento" / "01_xgboost.py"
+
+ALGORITMO_SELECCIONADO_PATH = SCRIPT_DIR / "algoritmo_seleccionado.json"
+
+MODULOS_INVESTIGACION = {
+    "xgboost": REPO_ROOT / "04_modelamiento" / "01_xgboost.py",
+    "lightgbm": REPO_ROOT / "04_modelamiento" / "02_lightgbm.py",
+}
+# Atributo bajo el cual cada módulo expone su propia librería de boosting
+# (para poder imprimir su versión sin hardcodear un solo algoritmo).
+LIB_ATTR_POR_ALGORITMO = {"xgboost": "xgb", "lightgbm": "lgb"}
 
 
-def _cargar_modulo_xgboost():
-    spec = importlib.util.spec_from_file_location("modelo_investigacion_xgboost", XGBOOST_MODULE_PATH)
+def _cargar_algoritmo_seleccionado() -> str:
+    if not ALGORITMO_SELECCIONADO_PATH.exists():
+        raise FileNotFoundError(
+            f"No se encontró {ALGORITMO_SELECCIONADO_PATH}. Corre primero "
+            f"seleccionar_algoritmo.py (Tarea 1) para decidir qué algoritmo entrenar."
+        )
+    seleccion = json.loads(ALGORITMO_SELECCIONADO_PATH.read_text(encoding="utf-8"))
+    algoritmo = seleccion["algoritmo"]
+    if algoritmo not in MODULOS_INVESTIGACION:
+        raise ValueError(f"Algoritmo desconocido en {ALGORITMO_SELECCIONADO_PATH}: {algoritmo!r}")
+    return algoritmo
+
+
+def _cargar_modulo_investigacion(algoritmo: str):
+    ruta = MODULOS_INVESTIGACION[algoritmo]
+    spec = importlib.util.spec_from_file_location(f"modelo_investigacion_{algoritmo}", ruta)
     modulo = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(modulo)
     return modulo
 
 
-mx = _cargar_modulo_xgboost()
+ALGORITMO = _cargar_algoritmo_seleccionado()
+mx = _cargar_modulo_investigacion(ALGORITMO)
 
 # ------------------------------------------------------------------
 # CONFIG
@@ -81,16 +112,25 @@ VERSIONES_DIR = SAVE_DIR / "versiones"
 # ------------------------------------------------------------------
 # Versionado del modelo
 # ------------------------------------------------------------------
-def _hash_hiperparametros(best_params: dict) -> str:
-    """sha256 (primeros 8 hex) de los hiperparámetros ganadores, en JSON
-    canónico (claves ordenadas) para que el mismo dict siempre dé el mismo hash."""
-    canon = json.dumps(best_params, sort_keys=True, default=str)
+def _hash_hiperparametros(algoritmo: str, best_params: dict) -> str:
+    """sha256 (primeros 8 hex) de (algoritmo + hiperparámetros ganadores), en
+    JSON canónico (claves ordenadas) para que la misma combinación siempre dé
+    el mismo hash. Se incluye `algoritmo` para que dos algoritmos que por
+    coincidencia comparten nombres de hiperparámetros con igual valor no
+    colisionen en el mismo hash."""
+    canon = json.dumps({"algoritmo": algoritmo, "params": best_params}, sort_keys=True, default=str)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:8]
 
 
-def generar_version_modelo(best_params: dict, control_path: Path = CONTROL_VERSION_PATH) -> tuple:
+def generar_version_modelo(algoritmo: str, best_params: dict, control_path: Path = CONTROL_VERSION_PATH) -> tuple:
     """
-    Genera el identificador de versión: v{contador:04d}_{YYYYMMDDHHMMSS}_{hash8}
+    Genera el identificador de versión:
+    v{contador:04d}_{YYYYMMDDHHMMSS}_{algoritmo}_{hash8}
+
+    El algoritmo queda explícito en el propio identificador de versión (no
+    solo en parametros_produccion.json) para poder distinguir de un vistazo,
+    en `predicciones.version_modelo` o en el nombre de la carpeta de
+    `versiones/`, qué algoritmo generó cada predicción histórica.
 
     El contador es incremental y persiste en `control_path` junto con un
     historial de versiones anteriores. Se genera una versión nueva en cada
@@ -103,13 +143,14 @@ def generar_version_modelo(best_params: dict, control_path: Path = CONTROL_VERSI
 
     contador = control["contador"] + 1
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    hash8 = _hash_hiperparametros(best_params)
-    version = f"v{contador:04d}_{timestamp}_{hash8}"
+    hash8 = _hash_hiperparametros(algoritmo, best_params)
+    version = f"v{contador:04d}_{timestamp}_{algoritmo}_{hash8}"
 
     control["contador"] = contador
     control["version_actual"] = version
     control["historial"].append({
         "version": version,
+        "algoritmo": algoritmo,
         "fecha_entrenamiento": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "hash_hiperparametros": hash8,
     })
@@ -205,7 +246,9 @@ def split_produccion(df, features, target_col=None, seed: int = SEED):
 def main():
     np.random.seed(SEED)
 
-    print(f"Versiones — xgboost={mx.xgb.__version__}  optuna={mx.optuna.__version__}  "
+    lib_boosting = getattr(mx, LIB_ATTR_POR_ALGORITMO[ALGORITMO])
+    print(f"Algoritmo seleccionado (Tarea 1, {ALGORITMO_SELECCIONADO_PATH.name}): {ALGORITMO}")
+    print(f"Versiones — {ALGORITMO}={lib_boosting.__version__}  optuna={mx.optuna.__version__}  "
           f"numpy={np.__version__}")
 
     features = mx.load_selected_features(mx.FEATURES_PATH)
@@ -227,7 +270,7 @@ def main():
     best_params = resultado["best_params"]
 
     print(f"\n{'='*60}")
-    print("SHAP nativo XGBoost — Feature Importance (Test)")
+    print(f"SHAP nativo {ALGORITMO} — Feature Importance (Test)")
     print("="*60)
     shap_importance = mx.compute_shap_native(models, resultado["X_test"])
     print(mx.pd.Series(shap_importance).head(15).to_string())
@@ -239,18 +282,24 @@ def main():
     print(f"  Bordes de deciles de precio: {[round(b, 0) for b in calibracion['bordes_deciles_precio']]}")
     print(f"  Bordes de terciles CV:       {[round(b, 4) for b in calibracion['bordes_cv_confianza']]}")
 
-    version, control = generar_version_modelo(best_params)
+    version, control = generar_version_modelo(ALGORITMO, best_params)
     print(f"\nVersión de modelo generada: {version}")
 
     version_dir = VERSIONES_DIR / version
     version_dir.mkdir(parents=True, exist_ok=True)
 
+    # Se guarda un dict (no la lista de modelos "pelada") para que
+    # 05_prediccion.py sepa con qué librería fue entrenado el ensamble y
+    # pueda elegir la función de predicción correcta (XGBoost y LightGBM
+    # tienen APIs de predict distintas) sin tener que inferirlo de otra
+    # parte ni asumir un único algoritmo posible.
     modelo_path = version_dir / "modelo_produccion.pkl"
     with open(modelo_path, "wb") as f:
-        pickle.dump(models, f)
+        pickle.dump({"algoritmo": ALGORITMO, "modelos": models}, f)
 
     params_data = {
         "version_modelo": version,
+        "algoritmo": ALGORITMO,
         "fecha_entrenamiento": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "features": features,
         "target_col": mx.TARGET_COL,
@@ -283,6 +332,7 @@ def main():
     print("RESUMEN FINAL")
     print("="*60)
     eval_test = resultado["eval_test"]
+    print(f"  Algoritmo: {ALGORITMO}")
     print(f"  Versión:  {version}")
     print(f"  TEST → MAE={eval_test['metricas_globales']['mae']:,.0f}  "
           f"RMSE={eval_test['metricas_globales']['rmse']:,.0f}  "

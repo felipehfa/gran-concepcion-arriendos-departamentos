@@ -4,9 +4,14 @@ Scraper de GRILLA incremental — pipeline de producción.
 No duplica el parsing HTML: carga `01_obtener_datos/01_scraper_grilla.py`
 como módulo (vía importlib, mismo patrón que las etapas anteriores) y
 reutiliza `construir_url`, `obtener_html`, `parsear_pagina`,
-`limpiar_precio` y sus constantes (comunas, tipos, delays, selectores).
+`limpiar_precio` y sus constantes (comunas, delays, selectores).
 
 Diferencias respecto al scraper original:
+  - Solo recorre TIPOS_PROPIEDAD_PRODUCCION (departamento), no
+    `sg.TIPOS_PROPIEDAD` completo (casa + departamento): el resto del
+    pipeline de producción solo procesa departamentos, así que traer casas
+    sería gastar presupuesto de scraping en avisos que nunca generan
+    features ni predicción.
   - Guarda SOLO avisos cuyo id_aviso no exista ya en la base ORIGINAL
     (avisos_gran_concepcion.db, solo lectura) NI en la base de PRODUCCIÓN.
   - Corte por MAX_PAGINAS_VACIAS_CONSECUTIVAS páginas seguidas sin ningún
@@ -37,6 +42,13 @@ log = logging.getLogger(__name__)
 MAX_PAGINAS_VACIAS_CONSECUTIVAS = 10   # por combinación comuna×tipo
 MAX_PAGINAS_POR_CORRIDA = 200          # techo global, sumando todas las combinaciones
 MAX_MINUTOS_POR_CORRIDA = 30           # techo global de tiempo
+
+# El resto del pipeline de producción (04_ingenieria_variables_produccion.py)
+# solo procesa tipo_propiedad='departamento' - traer 'casa' acá sería gastar
+# presupuesto de scraping (tiempo, requests, páginas) en avisos que nunca
+# van a generar features ni predicción. Configurable (en vez de hardcodear
+# el filtro) para poder sumar tipos el día que el modelo los soporte.
+TIPOS_PROPIEDAD_PRODUCCION = ["departamento"]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -135,7 +147,7 @@ def scrapear_grilla_incremental(
     max_minutos_corrida: float = MAX_MINUTOS_POR_CORRIDA,
 ) -> dict:
     comunas = comunas or sg.COMUNAS_GRAN_CONCEPCION
-    tipos = tipos or sg.TIPOS_PROPIEDAD
+    tipos = tipos or TIPOS_PROPIEDAD_PRODUCCION
 
     ids_originales = obtener_ids_originales(con_original)
     ids_produccion = obtener_ids_produccion(con_produccion)

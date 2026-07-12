@@ -14,11 +14,17 @@ script PUNTÚA avisos nuevos contra una POBLACIÓN DE REFERENCIA fija:
 
 Solo procesa avisos `tipo_propiedad='departamento'` (igual que el pipeline
 de investigación) con detalle scrapeado y que todavía no tengan fila en
-`predicciones`. `nivel_barrio` y la codificación one-hot de `comuna` no se
-calculan: ninguna de las 20 features seleccionadas las necesita.
+`predicciones`. La codificación one-hot de `comuna` no se calcula: no forma
+parte de las features seleccionadas.
+
+`FEATURES_ESPERADAS` se lee dinámicamente desde `selected_features.csv` (no
+hay un número fijo de features hardcodeado): si la selección de variables de
+investigación cambia de tamaño en el futuro, este script no necesita tocarse,
+siempre que las features nuevas ya estén cubiertas por `construir_features_produccion`.
 """
 
 import importlib.util
+import json
 import logging
 from pathlib import Path
 
@@ -47,8 +53,13 @@ def _cargar_modulo_ingenieria_variables():
 iv = _cargar_modulo_ingenieria_variables()
 FEATURES_ESPERADAS = pd.read_csv(FEATURES_PATH)["feature"].tolist()
 
+with open(iv.RUTA_SALIDA_NIVELES_BARRIO_DEFAULT, encoding="utf-8") as f:
+    _NIVELES_BARRIO = json.load(f)
+MAPA_BARRIO_A_NIVEL = _NIVELES_BARRIO["mapa_barrio_a_nivel"]
+NIVEL_BARRIO_DEFAULT = _NIVELES_BARRIO["nivel_default"]
+
 ID_COL = "id_aviso"
-COLUMNAS_VULNERABILIDAD = ["rank_nac", "pob_rsh_uv", "p_urbano"]
+COLUMNAS_VULNERABILIDAD = ["rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com"]
 
 MAX_DORMITORIOS = 6
 MAX_BANOS = 5
@@ -67,8 +78,12 @@ def obtener_avisos_pendientes(con) -> pd.DataFrame:
             d.piscina, d.ascensor, d.cantidad_paraderos, d.cantidad_colegios,
             d.distancia_centro_comuna_m, d.distancia_centro_concepcion_m,
             d.piso_unidad, d.superficie_util_m2, d.superficie_total_m2,
-            d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano,
-            d.latitud, d.longitud
+            d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano, d.c_ig_com,
+            d.latitud, d.longitud,
+            d.barrio, d.bodegas, d.conserjeria, d.estacionamiento_visitas,
+            d.condominio_cerrado, d.cantidad_jardines_infantiles,
+            d.cantidad_supermercados, d.cantidad_plazas, d.cantidad_farmacias,
+            d.cantidad_universidades, d.cantidad_centros_comerciales, d.cantidad_clinicas
         FROM avisos a
         JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
         LEFT JOIN predicciones p ON a.id_aviso = p.id_aviso
@@ -248,7 +263,45 @@ def imputar_superficies(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------
-# Construcción de las 20 features
+# Normalización de las columnas nuevas (features que se sumaron a las 20
+# originales) — mismo patrón que `preprocesar_variables_amenities` y
+# `rellenar_cantidad_pois_cercanos` en 01_ingenieria_variables.py: ausencia
+# de dato equivale a "no tiene"/"no hay ninguno cerca", así que se rellena
+# con 0 en vez de imputar contra la población de referencia.
+#
+# A diferencia de la base de investigación (donde estos campos llegan como
+# texto crudo "Sí"/"No"), `02_scraper_detalle_incremental.py` YA los
+# convierte a 0/1/NULL antes de insertarlos en avisos_detalle de producción
+# (ver `_a_booleano`/`_a_entero` ahí) — acá solo falta rellenar los NULL.
+# ------------------------------------------------------------------
+def normalizar_columnas_nuevas(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    columnas_a_cero = [
+        "bodegas", "conserjeria", "estacionamiento_visitas",
+        "cantidad_jardines_infantiles", "cantidad_supermercados",
+        "cantidad_plazas", "cantidad_farmacias", "cantidad_universidades",
+        "cantidad_centros_comerciales", "cantidad_clinicas",
+    ]
+    df[columnas_a_cero] = df[columnas_a_cero].apply(pd.to_numeric, errors="coerce")
+    df[columnas_a_cero] = df[columnas_a_cero].fillna(0)
+
+    # condominio_cerrado: sin dato -> False/0 (mismo fallback final que usa
+    # 01_ingenieria_variables.py cuando ni la moda por edificio resuelve el
+    # nulo). No se intenta imputar contra la población de referencia.
+    df["condominio_cerrado"] = pd.to_numeric(df["condominio_cerrado"], errors="coerce").fillna(0).astype(int)
+
+    # nivel_barrio: diccionario barrio->nivel ya calculado en investigación
+    # (03_ingenieria_variables/save/ingeniaria_variables/niveles_barrio.json).
+    # Un barrio ausente o no visto en el diccionario cae a NIVEL_BARRIO_DEFAULT.
+    df["nivel_barrio"] = df["barrio"].map(MAPA_BARRIO_A_NIVEL).fillna(NIVEL_BARRIO_DEFAULT).astype(int)
+
+    return df
+
+
+# ------------------------------------------------------------------
+# Construcción de las features seleccionadas (30 actualmente, leídas
+# dinámicamente desde selected_features.csv)
 # ------------------------------------------------------------------
 def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
     columnas_salida = [ID_COL] + FEATURES_ESPERADAS
@@ -272,6 +325,7 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
     pendientes["ratio_total_util"] = (
         pendientes["superficie_total_m2"] / pendientes["superficie_util_m2"].replace(0, np.nan)
     )
+    pendientes = normalizar_columnas_nuevas(pendientes)
 
     filas = []
     for _, fila in pendientes.iterrows():
@@ -300,6 +354,19 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
             "p_urbano": referencia.vulnerabilidad(fila["comuna"], "p_urbano", fila["p_urbano"]),
             "ascensor": fila["ascensor"] if pd.notna(fila["ascensor"]) else 0,
             "tiene_comparables_cercanos": int(tiene_comparables),
+            "bodegas": fila["bodegas"],
+            "conserjeria": fila["conserjeria"],
+            "estacionamiento_visitas": fila["estacionamiento_visitas"],
+            "condominio_cerrado": int(fila["condominio_cerrado"]),
+            "cantidad_jardines_infantiles": fila["cantidad_jardines_infantiles"],
+            "cantidad_supermercados": fila["cantidad_supermercados"],
+            "cantidad_plazas": fila["cantidad_plazas"],
+            "cantidad_farmacias": fila["cantidad_farmacias"],
+            "cantidad_universidades": fila["cantidad_universidades"],
+            "cantidad_centros_comerciales": fila["cantidad_centros_comerciales"],
+            "cantidad_clinicas": fila["cantidad_clinicas"],
+            "c_ig_com": referencia.vulnerabilidad(fila["comuna"], "c_ig_com", fila["c_ig_com"]),
+            "nivel_barrio": fila["nivel_barrio"],
         })
 
     resultado = pd.DataFrame(filas)

@@ -14,7 +14,7 @@ reimplementa acá; solo se duplican dos piezas chicas de configuración
 A diferencia de la base original (que guarda `vulnerabilidad_uv` y
 `avisos_igvust` como tablas de referencia separadas), acá el resultado del
 cruce se resuelve DIRECTO a columnas de `avisos_detalle`
-(uv_rsh, rank_nac, pob_rsh_uv, p_urbano) — ver esquema de la Etapa 2.
+(uv_rsh, rank_nac, pob_rsh_uv, p_urbano, c_ig_com) — ver esquema de la Etapa 2.
 
 Incremental: solo procesa avisos con coordenadas y uv_rsh todavía NULL. Una
 vez resuelto, no se vuelve a tocar (el cruce no cambia salvo que el
@@ -122,7 +122,7 @@ def resolver_vulnerabilidad(con, poligonos: gpd.GeoDataFrame, pendientes: pd.Dat
     # con la primera coincidencia por id_aviso).
     resultado = resultado.drop_duplicates(subset="id_aviso", keep="first")
 
-    columnas_a_guardar = ["uv_rsh", "rank_nac", "pob_rsh_uv", "p_urbano"]
+    columnas_a_guardar = ["uv_rsh", "rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com"]
     columnas_disponibles = [c for c in columnas_a_guardar if c in resultado.columns]
 
     avisos_sin_uv = 0
@@ -134,13 +134,14 @@ def resolver_vulnerabilidad(con, poligonos: gpd.GeoDataFrame, pendientes: pd.Dat
 
         con.execute("""
             UPDATE avisos_detalle
-            SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?
+            SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?, c_ig_com = ?
             WHERE id_aviso = ?
         """, (
             valores.get("uv_rsh"),
             _a_real(valores.get("rank_nac")),
             _a_entero(valores.get("pob_rsh_uv")),
             _a_real(valores.get("p_urbano")),
+            _a_real(valores.get("c_ig_com")),
             fila["id_aviso"],
         ))
 

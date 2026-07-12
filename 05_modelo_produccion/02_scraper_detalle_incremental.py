@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 LIMITE_NUEVOS_POR_CORRIDA = 2000
 
 DIAS_MIN_ENTRE_RECHEQUEOS = 7
-MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 50
+MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200
 
 # Umbral de fallos de scraping CONSECUTIVOS (entre corridas) antes de marcar
 # un aviso como 'no_disponible' y sacarlo de la cola de pendientes - ver
@@ -158,6 +158,9 @@ def extraer_estado_publicacion(estado: dict) -> str:
 # 03_ingenieria_variables/01_ingenieria_variables.py sobre estos campos
 # (pd.to_numeric directo, sin separador de miles chileno; "Sí"/"No" -> 1/0,
 # ausente -> NULL, no 0 — la imputación queda para la etapa de variables).
+# EXCEPCIÓN: gastos_comunes no sigue esta regla genérica, ver
+# _a_gastos_comunes() más abajo - necesita manejar el separador de miles
+# chileno y el placeholder de "incluido en el arriendo".
 # ------------------------------------------------------------------
 CAMPOS_BOOLEANOS = [
     "amoblado", "admite_mascotas", "condominio_cerrado", "estacionamiento_visitas",
@@ -167,7 +170,32 @@ CAMPOS_ENTEROS = [
     "dormitorios", "banos", "estacionamientos", "antiguedad_anos",
     "bodegas", "max_habitantes", "piso_unidad", "deptos_por_piso",
 ]
-CAMPOS_REALES = ["superficie_total_m2", "superficie_util_m2", "gastos_comunes", "latitud", "longitud"]
+CAMPOS_REALES = ["superficie_total_m2", "superficie_util_m2", "latitud", "longitud"]
+
+# gastos_comunes NO usa _a_real: el sitio formatea montos reales con "." como
+# separador de miles chileno (ej. "82.000" = $82.000), así que float() directo
+# los deja 1000 veces más chicos (82.000 -> 82.0). Además, cuando el
+# arrendador declara los gastos comunes como incluidos en el arriendo, el
+# sitio no deja el campo vacío: muestra un valor simbólico SIN separador de
+# miles (ej. "1", "10") - eso no es un monto, es un placeholder de "incluido"
+# (confirmado contra HTML en vivo: MLC-4164894602 muestra "Gastos comunes: 1
+# CLP" en la tabla de características mientras la descripción del aviso dice
+# textualmente "Gastos comunes incluidos"). Se mapea a 0 (mismo tratamiento
+# que un $0 CLP explícito: no hay costo adicional separado del arriendo) en
+# vez de agregar una columna booleona aparte - la distinción "incluido" vs
+# "$0 explícito" no cambia nada para el modelo (misma carga mensual real:
+# cero), y siempre se puede reconstruir después desde el texto crudo si hace
+# falta para otro fin.
+UMBRAL_PLACEHOLDER_INCLUIDO_CLP = 1000
+
+# Techo de sanidad: gastos comunes reales en el Gran Concepción no superan
+# este monto (el máximo verificado en el histórico corregido es $300.000).
+# Un valor por sobre esto -sea porque el sitio mostró el texto sin separador
+# de miles y era genuinamente enorme, sea porque el propio arrendador
+# escribió un número sin sentido en el campo (ej. "1.111.111", visto una vez
+# en 1766 avisos)- no se puede confirmar sin revisión manual, así que se
+# descarta en vez de guardarlo como si fuera un dato confiable.
+TECHO_SANIDAD_GASTOS_COMUNES_CLP = 500_000
 
 
 def _a_entero(valor):
@@ -186,6 +214,38 @@ def _a_real(valor):
         return float(valor)
     except (TypeError, ValueError):
         return None
+
+
+def _a_gastos_comunes(valor):
+    if valor is None:
+        return None
+    texto = str(valor).strip()
+    if not texto:
+        return None
+
+    try:
+        if "." in texto:
+            numero = float(texto.replace(".", "").replace(",", "."))
+        else:
+            numero = float(texto.replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+    if numero < UMBRAL_PLACEHOLDER_INCLUIDO_CLP and "." not in texto:
+        return 0.0
+
+    if numero > TECHO_SANIDAD_GASTOS_COMUNES_CLP:
+        log.warning(f"gastos_comunes='{texto}' -> {numero:.0f} CLP supera el techo de sanidad "
+                    f"({TECHO_SANIDAD_GASTOS_COMUNES_CLP:.0f}) - se descarta como outlier "
+                    f"implausible en vez de guardarlo sin poder confirmarlo.")
+        return None
+
+    if "." not in texto:
+        log.warning(f"gastos_comunes='{texto}' sin separador de miles pero >= "
+                    f"{UMBRAL_PLACEHOLDER_INCLUIDO_CLP} - caso atípico (visto 1 vez "
+                    f"en 1766 avisos históricos), se guarda literal sin transformar "
+                    f"para revisión manual.")
+    return numero
 
 
 def _a_booleano(valor):
@@ -207,6 +267,7 @@ def _convertir_datos(datos: dict) -> dict:
         convertido[campo] = _a_entero(datos.get(campo))
     for campo in CAMPOS_REALES:
         convertido[campo] = _a_real(datos.get(campo))
+    convertido["gastos_comunes"] = _a_gastos_comunes(datos.get("gastos_comunes"))
     return convertido
 
 
@@ -235,13 +296,25 @@ def obtener_pendientes_nuevos(con, limite: int = LIMITE_NUEVOS_POR_CORRIDA) -> p
 def obtener_pendientes_rechequeo(
     con, dias_min: int = DIAS_MIN_ENTRE_RECHEQUEOS, batch: int = MAX_AVISOS_RECHEQUEO_POR_CORRIDA,
 ) -> pd.DataFrame:
+    """
+    Candidatos a re-chequeo: avisos activos nunca chequeados
+    (fecha_ultimo_chequeo_estado IS NULL - ej. recién migrados del histórico,
+    ver migracion_historico_a_produccion.py) O que superaron el umbral de
+    DIAS_MIN_ENTRE_RECHEQUEOS desde su último chequeo.
+
+    Los NULL van primero (son los más urgentes: nunca se confirmó que el
+    aviso siga activo) y entre ellos no hay un orden natural adicional, así
+    que ORDER BY ... ASC alcanza: SQLite ordena NULL antes que cualquier
+    fecha en orden ascendente, así que ya deja los NULL al principio y, a
+    continuación, los vencidos por antigüedad de más antiguo a más reciente
+    - exactamente el orden de prioridad pedido, sin necesitar un CASE aparte.
+    """
     fecha_limite = (date.today() - timedelta(days=dias_min)).isoformat()
     pendientes = pd.read_sql_query("""
         SELECT id_aviso, url, comuna, tipo_propiedad, fecha_ultimo_chequeo_estado
         FROM avisos
         WHERE estado_publicacion = 'activo'
-          AND fecha_ultimo_chequeo_estado IS NOT NULL
-          AND fecha_ultimo_chequeo_estado <= ?
+          AND (fecha_ultimo_chequeo_estado IS NULL OR fecha_ultimo_chequeo_estado <= ?)
         ORDER BY fecha_ultimo_chequeo_estado ASC
         LIMIT ?
     """, con, params=(fecha_limite, batch))

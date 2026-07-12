@@ -64,6 +64,7 @@ def conectar_produccion(ruta_bd: Path = RUTA_BD_PRODUCCION) -> sqlite3.Connectio
     con.execute("PRAGMA foreign_keys = ON")
     _migrar_esquema_avisos(con)
     inicializar_bd_produccion(con)
+    _migrar_esquema_avisos_detalle(con)
     return con
 
 
@@ -152,6 +153,30 @@ def _migrar_esquema_avisos(con: sqlite3.Connection) -> None:
         )
 
 
+# ------------------------------------------------------------------
+# Migración de `avisos_detalle` sobre una base de datos YA existente
+# ------------------------------------------------------------------
+def _migrar_esquema_avisos_detalle(con: sqlite3.Connection) -> None:
+    """
+    Se llama DESPUÉS de inicializar_bd_produccion() (que ya garantiza que la
+    tabla exista con el esquema completo vía CREATE TABLE IF NOT EXISTS).
+    Si la tabla ya existía de antes (con datos) y le falta una columna nueva
+    del esquema actual (ej. c_ig_com, agregada junto con uv_rsh/rank_nac/
+    pob_rsh_uv/p_urbano en las features de vulnerabilidad), la agrega con
+    ALTER TABLE ... ADD COLUMN - operación segura e inmediata en SQLite, no
+    reescribe filas existentes (quedan con NULL en la columna nueva, listas
+    para que 03_vulnerabilidad_produccion.py las resuelva en su próxima
+    corrida, igual que cualquier aviso con uv_rsh todavía sin resolver).
+    """
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(avisos_detalle)").fetchall()}
+    if not columnas:
+        return
+
+    if "c_ig_com" not in columnas:
+        con.execute("ALTER TABLE avisos_detalle ADD COLUMN c_ig_com REAL")
+        con.commit()
+
+
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
     """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
     Ningún script de 05_modelo_produccion/ debe escribir en esta base."""
@@ -227,6 +252,7 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             rank_nac                       REAL,
             pob_rsh_uv                     INTEGER,
             p_urbano                       REAL,
+            c_ig_com                       REAL,
             fecha_scrapeo                  TEXT
         )
     """)

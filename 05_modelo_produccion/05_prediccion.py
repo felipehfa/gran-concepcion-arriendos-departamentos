@@ -8,6 +8,14 @@ calibración de oportunidad/confianza guardada en `parametros_produccion.json`
 CV) para etiquetar cada aviso, sin necesitar recalcular esos bordes con una
 sola fila nueva (imposible: qcut necesita una distribución).
 
+El modelo vigente puede ser XGBoost o LightGBM (lo decide
+`seleccionar_algoritmo.py`, ver Tarea 1/3) — `cargar_modelo_y_calibracion`
+lee el campo "algoritmo" de `parametros_produccion.json` y carga solo el
+script de investigación correspondiente, para usar SU `predict_ensemble_matrix`
+(mismo nombre en ambos módulos, pero cada uno sabe predecir con su propia
+librería). El resto de esta etapa (z_robusto, calibración de
+oportunidad/confianza, conversión UF→CLP, UPSERT) es agnóstico al algoritmo.
+
 Convierte el precio real del aviso a CLP antes de compararlo contra la
 predicción — reutiliza `convertir_precios_uf_a_clp` de
 01_ingenieria_variables.py (consulta mindicador.cl con caché, ahora en la
@@ -35,7 +43,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 ENTRENAMIENTO_DIR = SCRIPT_DIR / "entrenamiento"
 
-XGBOOST_MODULE_PATH = REPO_ROOT / "04_modelamiento" / "01_xgboost.py"
+MODULOS_INVESTIGACION = {
+    "xgboost": REPO_ROOT / "04_modelamiento" / "01_xgboost.py",
+    "lightgbm": REPO_ROOT / "04_modelamiento" / "02_lightgbm.py",
+}
 INGENIERIA_VARIABLES_PATH = REPO_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
 INGENIERIA_VARIABLES_PRODUCCION_PATH = SCRIPT_DIR / "04_ingenieria_variables_produccion.py"
 
@@ -47,7 +58,12 @@ def _cargar_modulo(nombre: str, ruta: Path):
     return modulo
 
 
-mx = _cargar_modulo("modelo_investigacion_xgboost", XGBOOST_MODULE_PATH)
+def _cargar_modulo_investigacion(algoritmo: str):
+    if algoritmo not in MODULOS_INVESTIGACION:
+        raise ValueError(f"Algoritmo desconocido en parametros_produccion.json: {algoritmo!r}")
+    return _cargar_modulo(f"modelo_investigacion_{algoritmo}", MODULOS_INVESTIGACION[algoritmo])
+
+
 iv = _cargar_modulo("ingenieria_variables_original", INGENIERIA_VARIABLES_PATH)
 ivp = _cargar_modulo("ingenieria_variables_produccion", INGENIERIA_VARIABLES_PRODUCCION_PATH)
 
@@ -62,18 +78,35 @@ def cargar_modelo_y_calibracion() -> dict:
     archivada por separado (no se sobrescribe), así que el modelo exacto
     usado en cualquier predicción pasada (predicciones.version_modelo)
     siempre se puede recuperar, no solo su identificador.
+
+    El algoritmo con el que predecir se determina leyendo el campo
+    "algoritmo" de parametros_produccion.json (Tarea 3) — no se asume
+    XGBoost. modelo_produccion.pkl guarda {"algoritmo": ..., "modelos": [...]},
+    así que de paso se valida que ambas fuentes coincidan.
     """
     control = json.loads((ENTRENAMIENTO_DIR / "version_modelo.json").read_text(encoding="utf-8"))
     version_actual = control["version_actual"]
     version_dir = ENTRENAMIENTO_DIR / "versiones" / version_actual
 
-    with open(version_dir / "modelo_produccion.pkl", "rb") as f:
-        models = pickle.load(f)
-
     params = json.loads((version_dir / "parametros_produccion.json").read_text(encoding="utf-8"))
+    algoritmo = params["algoritmo"]
+
+    with open(version_dir / "modelo_produccion.pkl", "rb") as f:
+        modelo_guardado = pickle.load(f)
+
+    if modelo_guardado["algoritmo"] != algoritmo:
+        raise ValueError(
+            f"Inconsistencia en {version_dir}: parametros_produccion.json dice "
+            f"algoritmo={algoritmo!r} pero modelo_produccion.pkl fue guardado con "
+            f"algoritmo={modelo_guardado['algoritmo']!r}."
+        )
+
+    mx = _cargar_modulo_investigacion(algoritmo)
 
     return {
-        "models": models,
+        "models": modelo_guardado["modelos"],
+        "algoritmo": algoritmo,
+        "predict_ensemble_matrix": mx.predict_ensemble_matrix,
         "version_modelo": params["version_modelo"],
         "features": params["features"],
         "calibracion": params["calibracion_oportunidad"],
@@ -153,10 +186,14 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
                 "version_modelo": modelo_info["version_modelo"]}
 
     precios = calcular_precio_clp(con_produccion, features_df["id_aviso"].tolist())
+    # Avisos con precio_clp fuera de rango (ventas mal clasificadas, datos
+    # corruptos) quedan fuera de precios -> el merge left les deja precio_clp
+    # en NaN -> el loop de abajo ya sabe saltarlos como "sin precio_clp válido".
+    precios = iv.filtrar_precio_maximo(precios)
     features_df = features_df.merge(precios, on="id_aviso", how="left")
 
     X = features_df.reindex(columns=modelo_info["features"], fill_value=0).fillna(0)
-    pred_matrix = mx.predict_ensemble_matrix(modelo_info["models"], X)
+    pred_matrix = modelo_info["predict_ensemble_matrix"](modelo_info["models"], X)
     y_pred = pred_matrix.mean(axis=0)
     pred_std = pred_matrix.std(axis=0)
     cv_ensamble = pred_std / np.where(y_pred == 0, 1e-6, y_pred)

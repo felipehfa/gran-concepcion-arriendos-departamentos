@@ -189,7 +189,20 @@ RE_CONDOMINIO_CERRADO = re.compile(r"En condominio cerrado:?\s*(Sí|No)", re.IGN
 
 # --- Campos nuevos: comunes a casa y departamento ---
 RE_BODEGAS = re.compile(r"Bodegas\s*(\d+)", re.IGNORECASE)
+
+# Igual que con RE_BANOS/RE_DORMITORIOS más arriba: "Gastos comunes" aparece
+# DOS VECES en la página. Primero en la insignia superior de resumen, con el
+# formato "Gastos comunes desde $ X" (la palabra "desde" antes del monto hace
+# que este patrón NUNCA matchee ahí) y, más abajo, en la sección de
+# características del inmueble, con el formato "Gastos comunes" / "X CLP" en
+# líneas separadas - que es el que este patrón captura normalmente.
+# RE_GASTOS_COMUNES_RESUMEN es un FALLBACK explícito (no se usa por defecto):
+# hay avisos donde la sección de características simplemente no incluye este
+# campo, pero la insignia superior sí trae el monto (confirmado en vivo, ver
+# investigación de gastos_comunes) - sin este fallback esos casos quedan
+# NULL aunque el dato exista en la página.
 RE_GASTOS_COMUNES = re.compile(r"Gastos comunes:?\s*\$?\s*([\d.,]+)", re.IGNORECASE)
+RE_GASTOS_COMUNES_RESUMEN = re.compile(r"Gastos comunes\s+desde\s*\$?\s*([\d.,]+)", re.IGNORECASE)
 RE_ESTACIONAMIENTO_VISITAS = re.compile(r"Estacionamiento de visitas:?\s*(Sí|No)", re.IGNORECASE)
 RE_SOLO_FAMILIAS = re.compile(r"Solo familias:?\s*(Sí|No)", re.IGNORECASE)
 RE_MAX_HABITANTES = re.compile(r"Cantidad máxima de habitantes\s*(\d+)", re.IGNORECASE)
@@ -719,6 +732,10 @@ def extraer_detalle(page) -> dict:
         m = patron.search(texto_completo)
         return m.group(1).strip() if m else None
 
+    gastos_comunes = buscar(RE_GASTOS_COMUNES)
+    if gastos_comunes is None:
+        gastos_comunes = buscar(RE_GASTOS_COMUNES_RESUMEN)
+
     fecha_texto = buscar(RE_FECHA_PUBLICACION)
     coordenadas = extraer_coordenadas(page)
 
@@ -740,7 +757,7 @@ def extraer_detalle(page) -> dict:
         "admite_mascotas": buscar(RE_ADMITE_MASCOTAS),
         "condominio_cerrado": buscar(RE_CONDOMINIO_CERRADO),
         "bodegas": buscar(RE_BODEGAS),
-        "gastos_comunes": buscar(RE_GASTOS_COMUNES),
+        "gastos_comunes": gastos_comunes,
         "estacionamiento_visitas": buscar(RE_ESTACIONAMIENTO_VISITAS),
         "solo_familias": buscar(RE_SOLO_FAMILIAS),
         "max_habitantes": buscar(RE_MAX_HABITANTES),
