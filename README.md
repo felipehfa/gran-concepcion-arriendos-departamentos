@@ -778,11 +778,22 @@ Corre las 5 etapas en orden. Por cada corrida:
   últimas `N_CORRIDAS_CONSECUTIVAS_SIN_NUEVOS = 5` corridas tuvieron 0 avisos nuevos en la
   grilla, y deja un `WARNING` explícito — podría ser un cambio en la estructura del sitio o un
   bloqueo no detectado, no necesariamente falta de contenido nuevo.
+- **Código de salida distinto de cero si `corridas.resultado == 'error'`** (`sys.exit(1)` en
+  `main()`): para que un runner externo (ej. GitHub Actions) marque la corrida como fallida y
+  avise, en vez de un check verde silencioso mientras el detalle del error solo queda en
+  `corridas`/`logs_ejecucion`.
 
 Pensado para cron, ej.:
 ```bash
 0 */4 * * * cd /ruta/al/proyecto/05_modelo_produccion && /ruta/al/python 00_orquestador.py
 ```
+
+**Despliegue vigente vía GitHub Actions** (`.github/workflows/orquestador.yml`): corre cada 6
+horas (4 corridas/día, `cron: '0 */6 * * *'`; antes cada 12h/2 corridas al día) más
+`workflow_dispatch` para disparo manual desde la pestaña Actions. El paso de commit/push de
+`produccion_gran_concepcion.db` corre con `if: always()`, así que el diagnóstico (tabla
+`corridas`/`logs_ejecucion`) se persiste en el repo incluso si el orquestador terminó en
+`sys.exit(1)` — solo el job queda en rojo, el commit de la BD no se salta.
 
 ### 12.4. Notas y limitaciones conocidas de esta sección
 
@@ -981,6 +992,12 @@ justo durante una corrida.
 Todo el resultado se cachea con `st.cache_data(ttl=600)` — 10 minutos, ya que la base la
 actualiza el orquestador en segundo plano (vía cron), no en cada request del usuario.
 
+`fecha_publicacion_aprox` (aproximada, calculada por el scraper a partir de texto relativo tipo
+"hace 3 meses") se conserva en el DataFrame que llega a la UI — antes se descartaba en
+`load_data()` junto con `precio_clp`/`moneda`, ya que hasta ahora nada la consumía; ahora la
+usan tanto el orden "Más recientes primero" como la fecha que se muestra en cada tarjeta (ver
+14.3).
+
 ### 14.3. Filtros y diseño visual
 
 Sidebar con precio/superficie (sliders de rango), dormitorios/baños (checkboxes con conteo,
@@ -989,6 +1006,20 @@ todo marcado por defecto), amenities en una sección colapsable, y un filtro de
 `estado_publicacion` (activo por defecto, con opción de incluir pausados). Botón "Limpiar
 filtros" vía `st.session_state` (un callback que resetea las keys a sus valores por defecto
 antes del siguiente render).
+
+**Orden de resultados** (`app.py`, selectbox sobre `filtered_df`): "Más relevantes" (sin
+reordenar), "Mejor oportunidad" (`z_robusto` ascendente), "Precio: menor a mayor/mayor a menor",
+y **"Más recientes primero"** (`fecha_publicacion_aprox` descendente,
+`na_position="last"` — alrededor de 1 de cada 5 avisos activos no trae esa fecha porque la
+página de detalle no siempre la informa, y esos avisos van al final en vez de asumirles una
+fecha). Cada tarjeta (`components.py`) muestra ahora también "Publicado: hace N días/meses/años"
+(o "fecha no disponible" si es nula) debajo del precio, con el mismo criterio de redondeo que
+`_format_frescura` usa para "Datos verificados: hace N días".
+
+El contador de resultados ("N departamentos encontrados") pasó de un `<p>` de texto plano a una
+tarjeta propia (`.result-count-card`, texto en negro y fondo alineado con el selectbox de
+orden) para que ambos elementos se vean como un bloque visual único a la altura del selector de
+orden, en vez de texto suelto flotando junto a un dropdown con su propio fondo.
 
 **Tema forzado a claro** (`.streamlit/config.toml`, `theme.base = "light"`): el diseño usa una
 paleta fija (fondo gris claro, tarjetas blancas, semáforo verde/gris/rojo para las etiquetas) —
