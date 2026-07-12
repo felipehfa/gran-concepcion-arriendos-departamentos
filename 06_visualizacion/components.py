@@ -57,11 +57,8 @@ def _format_publicacion(fecha_val) -> str:
         return "Publicado: hoy"
     if dias == 1:
         return "Publicado: hace 1 día"
-    if dias < 7:
-        return f"Publicado: hace {dias} días"
     if dias < 30:
-        semanas = dias // 7
-        return f"Publicado: hace {semanas} semana{'s' if semanas != 1 else ''}"
+        return f"Publicado: hace {dias} días"
     if dias < 365:
         meses = dias // 30
         return f"Publicado: hace {meses} mes{'es' if meses != 1 else ''}"

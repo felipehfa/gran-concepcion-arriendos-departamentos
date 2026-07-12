@@ -75,18 +75,28 @@ def inject_css() -> None:
             font-size: 1.05rem;
             margin-top: 0;
         }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stSelectbox"]) {{
+            align-items: center;
+        }}
         .result-count-card {{
-            display: inline-block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            height: 46px;
             background-color: {COLOR_PRIMARY};
             color: #FFFFFF !important;
             font-size: 0.95rem;
             font-weight: 700;
             box-shadow: 0 1px 4px rgba(0,0,0,0.12);
             border-radius: 10px;
-            padding: 10px 18px;
-            margin-top: 2px;
+            padding: 0 18px;
         }}
         [data-testid="stSelectbox"] [data-baseweb="select"] > div {{
+            box-sizing: border-box;
+            height: 46px;
+            display: flex;
+            align-items: center;
             background-color: {COLOR_CARD_BG};
             box-shadow: 0 1px 4px rgba(0,0,0,0.12);
             border-radius: 10px;
