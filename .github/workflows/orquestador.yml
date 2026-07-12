@@ -36,6 +36,7 @@ jobs:
           python 05_modelo_produccion/00_orquestador.py
 
       - name: Commit y push de la BD actualizada
+        if: always()   # persistir el diagnóstico (tabla corridas/logs_ejecucion) aunque el orquestador haya terminado en error
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

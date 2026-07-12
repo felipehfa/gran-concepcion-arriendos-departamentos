@@ -26,6 +26,7 @@ Pensado para correr sin intervención manual vía cron / tarea programada
 
 import importlib.util
 import logging
+import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -270,6 +271,15 @@ def main():
         con_produccion.close()
         con_original.close()
 
+    return r["resultado"]
+
 
 if __name__ == "__main__":
-    main()
+    if main() == "error":
+        # Process no cero: para que GitHub Actions marque el job (y por lo
+        # tanto la corrida programada) como fallido y avise, en vez de un
+        # check verde silencioso mientras el detalle del fallo solo queda
+        # en la tabla `corridas`/`logs_ejecucion`. El commit/push de la BD
+        # sigue corriendo igual (el workflow lo marca con `if: always()`),
+        # así el diagnóstico llega al repo aunque el job termine en rojo.
+        sys.exit(1)
