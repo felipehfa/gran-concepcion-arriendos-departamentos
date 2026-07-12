@@ -81,16 +81,12 @@ def inject_css() -> None:
         .result-count-card {{
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             box-sizing: border-box;
             height: 46px;
-            background-color: {COLOR_PRIMARY};
-            color: #FFFFFF !important;
+            color: #000000 !important;
             font-size: 0.95rem;
             font-weight: 700;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-            border-radius: 10px;
-            padding: 0 18px;
         }}
         [data-testid="stSelectbox"] [data-baseweb="select"] > div {{
             box-sizing: border-box;
