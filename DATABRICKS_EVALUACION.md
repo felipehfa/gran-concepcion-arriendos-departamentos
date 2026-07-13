@@ -2,6 +2,8 @@
 
 > Documento de dos partes: (1) diagnóstico de viabilidad de migrar el pipeline de producción completo a Databricks, y (2) guía de un POC acotado para aprender Databricks (Delta Lake + MERGE INTO, Jobs/Workflows) sin comprometerse a migrar el proyecto real.
 
+> **Nota de actualización (2026-07-13)**: el diagnóstico original se escribió antes de que existiera `.github/workflows/orquestador.yml`. Desde entonces se confirmó un runner real en GitHub Actions (corriendo cada 4h) y se refactorizó `03_vulnerabilidad_produccion.py` para dejar de depender de `geopandas`/el shapefile en cada corrida. Las secciones 1 y 2 de la Parte 1 se corrigieron para reflejar el estado actual; el resto del diagnóstico (base de datos, orquestador, entrenamiento, recomendación final) sigue vigente.
+
 ---
 
 # Parte 1 — Diagnóstico de viabilidad
@@ -13,7 +15,7 @@
 | `00_orquestador.py` | `logging`, `RotatingFileHandler`, `importlib.util`, `pathlib` | carga las 5 etapas |
 | `01_scraper_grilla_incremental.py` | `requests`-based (heredado) | `01_obtener_datos/01_scraper_grilla.py` |
 | `02_scraper_detalle_incremental.py` | `pandas` | `01_obtener_datos/02_scraper_detalle.py` |
-| `03_vulnerabilidad_produccion.py` | `geopandas`, `shapely`, `pandas` | ninguno (reimplementa a propósito, ver docstring) |
+| `03_vulnerabilidad_produccion.py` | `shapely`, `pandas` (**ya no `geopandas`**, ver corrección abajo) | ninguno (reimplementa a propósito, ver docstring) |
 | `04_ingenieria_variables_produccion.py` | `numpy`, `pandas`, `sklearn.neighbors.BallTree` | `03_ingenieria_variables/01_ingenieria_variables.py` |
 | `05_prediccion.py` | `numpy`, `pandas`, `pickle` | `04_modelamiento/{01_xgboost,02_lightgbm}.py` + `04_ingenieria_variables_produccion.py` |
 | `entrenamiento/01_entrenar_modelo_produccion.py` | `numpy`, `pandas`, `sklearn.model_selection`, `hashlib` | `04_modelamiento/{01_xgboost,02_lightgbm}.py` (que a su vez traen `xgboost`/`lightgbm`, `optuna`, `scipy.stats`) |
@@ -29,10 +31,11 @@
 **Dependencias de sistema/rutas**:
 - Todos los scripts resuelven rutas con `Path(__file__).resolve().parent` + `REPO_ROOT` — no hay rutas absolutas de Windows hardcodeadas, pero **sí asumen que todo el repo (`01_obtener_datos/`, `03_ingenieria_variables/`, `04_modelamiento/`, `05_modelo_produccion/`) está presente junto**, con la misma estructura relativa.
 - `sqlite3.connect()` sobre archivos locales: `produccion_gran_concepcion.db` (r/w) y `avisos_gran_concepcion.db` (modo URI `?mode=ro`).
-- Shapefile de vulnerabilidad (`03_vulnerabilidad_produccion.py`) es un dato externo no versionado, leído por ruta local.
+- **Corregido tras un refactor posterior**: `03_vulnerabilidad_produccion.py` **ya no lee el shapefile en cada corrida** ni depende de `geopandas`. El cruce punto-en-polígono se resuelve con `shapely` puro contra la tabla `poligonos_vulnerabilidad_uv` (polígonos IGVUST precalculados una vez, guardados como WKT en la propia BD de producción). El shapefile y `geopandas` solo hacen falta para `migrar_poligonos_vulnerabilidad.py`, que se corre a mano y localmente cuando el shapefile se actualiza — nunca dentro del pipeline automatizado. Esto **elimina una fricción real** que este diagnóstico originalmente contaba contra la portabilidad del pipeline (una dependencia de sistema pesada, GDAL, y acceso a un archivo externo no versionado, ambos fuera del runner de CI).
 - `RotatingFileHandler` escribe a `05_modelo_produccion/logs/orquestador.log`.
-- **Corrección de un supuesto**: no existe ningún workflow en `.github/workflows/` — "GitHub Actions" en el README es solo un ejemplo hipotético de entorno sin Playwright, no el mecanismo real de ejecución. Lo que corre el pipeline hoy es cron/Programador de Tareas local.
-- **Incidente ya documentado (README sección 13.2)**: el repo vive dentro de una carpeta sincronizada por Google Drive. Una corrida de migración con ~1628 commits SQLite seguidos perdió 25 filas silenciosamente — causa más probable: interferencia del sincronizador de Drive con el archivo `.db` durante la ventana de escritura larga.
+- **Supuesto corregido**: al momento de escribir el diagnóstico original no existía ningún workflow en `.github/workflows/`, y se asumía que "GitHub Actions" en el README era solo un ejemplo hipotético. Esto ya no es así: `.github/workflows/orquestador.yml` es real y es el mecanismo de ejecución vigente — corre en un runner `ubuntu-latest`, con cron (`0 */4 * * *`, cada 4h; subió de 12h a 6h a 4h en tres cambios sucesivos) más `workflow_dispatch` para disparo manual. El job instala `05_modelo_produccion/requirements.txt` (ahora explícitamente sin `geopandas`, con `lxml` agregado), corre `00_orquestador.py`, y comitea/pushea la BD actualizada con `if: always()` — el diagnóstico (`corridas`/`logs_ejecucion`) llega al repo incluso si el job termina en rojo. Esto es relevante para la Sección 4: el patrón "Job con pasos secuenciales + notificación de fallo" que se buscaría en Databricks Jobs **ya existe hoy**, corriendo en CI en vez de localmente.
+- **Fricción nueva encontrada al operar el workflow**: al comitear la BD desde el runner, corridas concurrentes (o un push manual mientras corre una programada) pueden generar conflictos de git. Se agregó `git pull --rebase origin main` antes del `push` en el paso de commit para evitarlos — un problema de concurrencia distinto al incidente de Google Drive de abajo, pero de la misma familia: **versionar una base SQLite completa en git tiene costos de concurrencia crecientes** a medida que aumenta la frecuencia de corridas (ya en 4h/día). Es una señal más a favor de migrar la persistencia a algo remoto (Delta, o incluso solo una base gestionada) si la frecuencia sigue subiendo — no necesariamente a favor de Databricks completo (ver recomendación en sección 6).
+- **Incidente ya documentado (README/CHANGELOG)**: el repo vive dentro de una carpeta sincronizada por Google Drive. Una corrida de migración con ~1628 commits SQLite seguidos perdió 25 filas silenciosamente — causa más probable: interferencia del sincronizador de Drive con el archivo `.db` durante la ventana de escritura larga.
 
 ## 2. La base de datos: SQLite vs. tablas Delta
 
@@ -42,6 +45,7 @@
 |---|---|
 | `avisos` | `id_aviso TEXT PRIMARY KEY`; NOT NULL en comuna/tipo_propiedad/operacion; `estado_publicacion` CHECK IN (activo, pausado, finalizado, no_disponible), DEFAULT 'activo'; `intentos_fallidos_detalle` DEFAULT 0 |
 | `avisos_detalle` | `id_aviso TEXT PRIMARY KEY REFERENCES avisos(id_aviso)` (FK); ~40 columnas incl. 11 subcategorías POI × 2 + columnas de vulnerabilidad |
+| `poligonos_vulnerabilidad_uv` *(nueva desde el refactor de geopandas)* | `uv_rsh TEXT PRIMARY KEY`; `geometria_wkt TEXT NOT NULL` (polígono IGVUST en WKT/EPSG:4326) + columnas escalares (`rank_nac`, `pob_rsh_uv`, `p_urbano`, `c_ig_com`) — poblada una única vez vía `migrar_poligonos_vulnerabilidad.py`, de solo lectura para el resto del pipeline |
 | `predicciones` | `id INTEGER PRIMARY KEY AUTOINCREMENT`; FK a avisos; `etiqueta`/`nivel_confianza` CHECK; **UNIQUE(id_aviso, version_modelo)** |
 | `corridas` | `id_corrida INTEGER PRIMARY KEY AUTOINCREMENT`; `resultado` CHECK IN (ok, error, parcial); `motivo_corte_grilla` CHECK |
 | `logs_ejecucion` | `id INTEGER PRIMARY KEY AUTOINCREMENT`; FK a corridas; `etapa` CHECK IN (7 valores); `nivel` CHECK |
@@ -52,6 +56,7 @@
 - PRIMARY KEY / FOREIGN KEY existen en Unity Catalog como constraints **informativos** (no enforced por defecto) — SQLite sí los enforcea hoy (`PRAGMA foreign_keys=ON`), así que hay enforcement real que se perdería.
 - CHECK constraints: Delta soporta `ALTER TABLE ... ADD/DROP CONSTRAINT ... CHECK (...)` — **más simple** que hoy: en SQLite cambiar un CHECK obliga a reconstruir la tabla completa (`_migrar_esquema_avisos` en `db.py`: crear tabla nueva, copiar filas, drop, rename).
 - AUTOINCREMENT no existe en Delta — se reemplaza con `GENERATED ALWAYS AS IDENTITY`, pero el patrón `cur.lastrowid` (usado en `00_orquestador.py:crear_corrida()`) no tiene equivalente 1:1: hay que hacer un SELECT de vuelta tras el INSERT.
+- `poligonos_vulnerabilidad_uv` es, de las siete tablas, la que mejor encajaría en Delta sin fricción: se escribe una sola vez (o rara vez) y se lee siempre — el caso de uso típico de una tabla Delta de referencia, sin el problema de UPSERT fila-a-fila que sí tienen las demás (ver más abajo).
 
 **UPSERT → MERGE INTO** — confirmado en 3 archivos dentro de `05_modelo_produccion/`:
 1. `db.py:escribir_control()` — `ON CONFLICT(clave) DO UPDATE`
@@ -81,6 +86,8 @@ Dos fricciones reales (no relacionadas con Playwright):
 
 **Qué se gana**: reintentos nativos por task, alertas nativas, historial de corridas navegable en la UI, sin mantener el `RotatingFileHandler` local.
 
+**Actualización**: desde este diagnóstico, `00_orquestador.py` ya implementa a mano una versión ligera de lo que Jobs daría nativo — `main()` retorna el resultado de la corrida y el bloque `if __name__ == "__main__"` hace `sys.exit(1)` cuando es `"error"`, para que el runner de GitHub Actions marque el job (y por lo tanto la corrida programada) como fallido. El workflow persiste el diagnóstico (commit/push de `corridas`/`logs_ejecucion`) con `if: always()` incluso cuando el job termina en rojo. Esto confirma el punto de "qué se pierde/reimplementa": ya se reimplementó, con ~10 líneas de código propio — la ganancia real de migrar a Jobs seguiría siendo la UI/alertas nativas, no la señal de fallo en sí, que ya existe.
+
 **Qué se pierde/reimplementa**: el `RotatingFileHandler` se vuelve redundante y se puede eliminar. Pero `corridas`/`logs_ejecucion` (metadata de negocio: avisos_nuevos_grilla, motivo_corte_grilla, etc.) no las reemplaza el historial genérico de Jobs — ese logging seguiría siendo código propio, escribiendo a Delta en vez de SQLite.
 
 ## 5. El entrenamiento del modelo: XGBoost/LightGBM en Databricks
@@ -100,7 +107,7 @@ Optuna, bagging manual multi-seed y TreeSHAP nativo son trabajo Python/NumPy pur
 
 **Orden incremental si se migrara**: (1) reestructurar el repo como paquete instalable, (2) orquestador como Jobs, (3) capa de datos a Delta con reescritura batch, (4) entrenamiento al final (lo que menos se beneficia).
 
-**Recomendación honesta**: con ~1600-2000 avisos, un solo usuario, y sin necesidad de cómputo distribuido, **no vale la pena migrar todo esto a Databricks por necesidad del proyecto**. El costo (reescritura de persistencia, restructuración a paquete, gestión de clusters/jobs, facturación) es desproporcionado frente al beneficio en este volumen. El problema real de infraestructura hoy (pérdida silenciosa de filas por vivir en una carpeta sincronizada por Google Drive) se resuelve sacando el repo/BD de esa carpeta o moviendo la ejecución a un runner remoto — no requiere un Lakehouse completo.
+**Recomendación honesta**: con ~1600-2000 avisos, un solo usuario, y sin necesidad de cómputo distribuido, **no vale la pena migrar todo esto a Databricks por necesidad del proyecto**. El costo (reescritura de persistencia, restructuración a paquete, gestión de clusters/jobs, facturación) es desproporcionado frente al beneficio en este volumen. La ejecución ya se movió a un runner remoto (GitHub Actions, sección 1) desde este diagnóstico, lo que resuelve el incidente original de Google Drive para la corrida programada — pero introdujo su propia fricción de concurrencia (conflictos de git al comitear la BD, mitigados con `rebase`). Ambos son síntomas del mismo patrón (SQLite versionada en git como mecanismo de persistencia), no una razón para un Lakehouse completo; una base gestionada remota (o Delta, si de todas formas se adopta Databricks) los resolvería de raíz, con mucho menos costo que migrar todo el pipeline.
 
 **Componente que sí valdría la pena mover independientemente**: MLflow (open-source, sin necesitar Databricks completo) para el versionado de modelos, si el catálogo de versiones crece lo suficiente. No es urgente hoy.
 
