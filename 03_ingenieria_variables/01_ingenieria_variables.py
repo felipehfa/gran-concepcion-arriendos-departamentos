@@ -18,6 +18,7 @@ import sqlite3
 import re
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -44,6 +45,7 @@ RUTA_SALIDA_CSV_DEFAULT = str(DIRECTORIO_SALIDA / "datos_ingenieria_variables.cs
 RUTA_SALIDA_NIVELES_BARRIO_DEFAULT = str(DIRECTORIO_SALIDA / "niveles_barrio.json")
 
 API_UF_URL = "https://mindicador.cl/api/uf/{fecha}"
+UF_API_MAX_WORKERS = 8  # fechas faltantes en paralelo al arrancar con la BD fría
 TASA_USD_CLP = 930  # tasa fija: solo hay un puñado de avisos en US$, no justifica ir a buscar el valor por fecha a una API
 PRECIO_MAXIMO_ARRIENDO_CLP = 8_000_000  # sobre este monto ya no es un arriendo real (venta mal clasificada o dato corrupto)
 
@@ -409,12 +411,21 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
 
     fechas_faltantes = [f for f in fechas_a_verificar if f not in valor_uf_por_fecha]
 
-    for fecha in fechas_faltantes:
-        valor = obtener_valor_uf_api(fecha)
-        if valor is not None:
-            guardar_valor_uf_en_bd(con, fecha, valor)  # se guarda de inmediato para la próxima corrida
-            valor_uf_por_fecha[fecha] = valor
-        time.sleep(0.3)  # para no golpear la API de más
+    # Fetch en paralelo (I/O-bound): en la primera corrida con la BD fría
+    # esto puede ser una docena de fechas distintas, y consultarlas de a una
+    # con sleep(0.3) entre cada una hacía que la carga inicial se sintiera
+    # colgada. Los requests corren en threads; la escritura a sqlite se hace
+    # en el hilo principal a medida que van llegando (la conexión no es
+    # thread-safe para usarse desde varios threads a la vez).
+    if fechas_faltantes:
+        with ThreadPoolExecutor(max_workers=UF_API_MAX_WORKERS) as executor:
+            futuros = {executor.submit(obtener_valor_uf_api, fecha): fecha for fecha in fechas_faltantes}
+            for futuro in as_completed(futuros):
+                fecha = futuros[futuro]
+                valor = futuro.result()
+                if valor is not None:
+                    guardar_valor_uf_en_bd(con, fecha, valor)  # se guarda de inmediato para la próxima corrida
+                    valor_uf_por_fecha[fecha] = valor
 
     con.close()
 
@@ -422,14 +433,12 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
     # específica no se pudo obtener, cae al valor ya resuelto de fecha_promedio)
     df["precio_clp"] = df["precio"].astype(float)
 
-    for idx in df.index[mask_uf]:
-        fecha = fechas_a_usar.loc[idx]
-        valor_uf = valor_uf_por_fecha.get(fecha) or valor_uf_por_fecha.get(fecha_promedio)
+    valores_uf_resueltos = fechas_a_usar.map(valor_uf_por_fecha)
+    valor_uf_fallback = valor_uf_por_fecha.get(fecha_promedio)
+    if valor_uf_fallback is not None:
+        valores_uf_resueltos = valores_uf_resueltos.fillna(valor_uf_fallback)
 
-        if valor_uf is not None:
-            df.loc[idx, "precio_clp"] = df.loc[idx, "precio"] * valor_uf
-        else:
-            df.loc[idx, "precio_clp"] = None
+    df.loc[mask_uf, "precio_clp"] = df.loc[mask_uf, "precio"] * valores_uf_resueltos
 
     # Paso 5: US$ -> CLP con tasa fija (no fluctúa por fecha como la UF, no
     # amerita el mismo mecanismo de caché/API)

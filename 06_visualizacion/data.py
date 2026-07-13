@@ -2,6 +2,7 @@
 
 import importlib.util
 import sqlite3
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -80,8 +81,16 @@ def _cargar_ingenieria_variables():
     y filtrar_precio_maximo: son las mismas funciones que estandarizan y acotan
     el precio real contra el que se compara la predicción, así que la vista no
     puede tener su propia lógica: tiene que ser literalmente esta."""
-    spec = importlib.util.spec_from_file_location("ingenieria_variables_original", INGENIERIA_VARIABLES_PATH)
+    nombre_modulo = "ingenieria_variables_original"
+    # Cacheado en sys.modules: el archivo importa sklearn (RandomForestRegressor,
+    # BallTree, etc.) en su top-level, y load_data() se re-ejecuta cada vez que
+    # expira el cache de 10 min. Sin este cacheo, cada expiración repetía esos
+    # imports y la ejecución completa del módulo en vez de reutilizar el ya cargado.
+    if nombre_modulo in sys.modules:
+        return sys.modules[nombre_modulo]
+    spec = importlib.util.spec_from_file_location(nombre_modulo, INGENIERIA_VARIABLES_PATH)
     modulo = importlib.util.module_from_spec(spec)
+    sys.modules[nombre_modulo] = modulo
     spec.loader.exec_module(modulo)
     return modulo
 

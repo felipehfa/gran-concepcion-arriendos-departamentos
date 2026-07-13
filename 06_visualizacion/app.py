@@ -1,8 +1,10 @@
 """Gran Concepción Rentals — visualizador de departamentos en arriendo."""
 
+import math
+
 import streamlit as st
 
-from components import render_card, render_map
+from components import render_cards, render_map
 from data import load_data
 from explicacion import render as render_explicacion
 from filters import render_sidebar
@@ -15,6 +17,36 @@ ORDER_OPTIONS = [
     "Precio: menor a mayor",
     "Precio: mayor a menor",
 ]
+
+# Tarjetas por página: sin paginar, un rerun (cualquier filtro/orden) montaba
+# un st.markdown y cientos de nodos DOM por cada aviso filtrado, la mayoría
+# fuera del área visible del contenedor con scroll.
+PAGE_SIZE = 24
+
+
+def _paginate(df, page_key: str = "f_page"):
+    st.session_state.setdefault(page_key, 1)
+    total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
+    if st.session_state[page_key] > total_pages:
+        st.session_state[page_key] = 1
+    page = st.session_state[page_key]
+
+    def _go_prev():
+        st.session_state[page_key] -= 1
+
+    def _go_next():
+        st.session_state[page_key] += 1
+
+    prev_col, label_col, next_col = st.columns([1, 2, 1])
+    with prev_col:
+        st.button("← Anterior", disabled=page <= 1, on_click=_go_prev, use_container_width=True)
+    with label_col:
+        st.markdown(f'<div class="page-label">Página {page} de {total_pages}</div>', unsafe_allow_html=True)
+    with next_col:
+        st.button("Siguiente →", disabled=page >= total_pages, on_click=_go_next, use_container_width=True)
+
+    start = (page - 1) * PAGE_SIZE
+    return df.iloc[start : start + PAGE_SIZE]
 
 
 def sort_listings(df, order: str):
@@ -72,12 +104,23 @@ def render_buscador() -> None:
         st.info("Ningún aviso coincide con los filtros seleccionados.")
         return
 
+    # Si cambió algún filtro o el orden desde el último rerun, se vuelve a la
+    # página 1 (si no, una tarjeta en la página 3 del filtro anterior no
+    # tiene relación con el nuevo resultado filtrado).
+    filter_signature = (
+        order,
+        tuple(sorted((k, str(v)) for k, v in st.session_state.items() if k.startswith("f_") and k != "f_page")),
+    )
+    if st.session_state.get("_last_filter_signature") != filter_signature:
+        st.session_state["f_page"] = 1
+        st.session_state["_last_filter_signature"] = filter_signature
+
     list_col, map_col = st.columns([1, 1])
 
     with list_col:
+        page_df = _paginate(filtered_df)
         with st.container(height=800, border=False):
-            for _, row in filtered_df.iterrows():
-                render_card(row)
+            render_cards(page_df)
 
     with map_col:
         render_map(filtered_df)

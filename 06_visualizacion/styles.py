@@ -172,6 +172,15 @@ def inject_css() -> None:
         .card-link a:hover {{
             text-decoration: underline;
         }}
+        .page-label {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: {COLOR_TEXT_BODY} !important;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
