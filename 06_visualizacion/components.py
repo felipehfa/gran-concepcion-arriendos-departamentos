@@ -134,11 +134,17 @@ def render_map(df: pd.DataFrame) -> None:
             <a href="{html.escape(row['url'])}" target="_blank" rel="noopener noreferrer">Ver publicación</a>
         </div>
         """
+        # Leaflet por defecto da más z-index a los pines más abajo en pantalla
+        # (para simular profundidad); ese offset alto fuerza a "oportunidad" a
+        # quedar siempre por encima de precio_de_mercado/caro sin importar su
+        # posición.
+        z_index_offset = 1000 if row["etiqueta"] == "oportunidad" else 0
         folium.Marker(
             location=(row["latitud"], row["longitud"]),
             popup=folium.Popup(popup_html, max_width=250),
             tooltip=titulo,
             icon=_pin_icon(ETIQUETA_COLORS.get(row["etiqueta"], "#888")),
+            z_index_offset=z_index_offset,
         ).add_to(m)
 
     st_folium(m, use_container_width=True, height=720, returned_objects=[])
