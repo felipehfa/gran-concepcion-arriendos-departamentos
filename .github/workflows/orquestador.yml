@@ -43,5 +43,6 @@ jobs:
           git add 05_modelo_produccion/produccion_gran_concepcion.db
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           git diff --staged --quiet || git commit -m "Actualización automática BD producción [skip ci] - $TIMESTAMP"
-          git pull --rebase origin main
-          git push
+          git fetch origin main
+          git merge -X ours --no-edit origin/main
+          git push origin HEAD:main
