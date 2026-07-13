@@ -44,10 +44,13 @@ CONFIANZA_COLORS = {
 
 CONFIANZA_ORDER = {"alta confianza": 0, "confianza media": 1, "confianza baja": 2}
 
-FOLIUM_ICON_COLOR = {
-    "oportunidad": "green",
-    "precio_de_mercado": "blue",
-    "caro": "red",
+# Círculo con relleno progresivo (lleno > mitad > vacío): se ve consistente
+# entre fuentes, a diferencia de una "media estrella" que muchas fuentes
+# renderizan como estrella llena.
+CONFIANZA_SYMBOLS = {
+    "alta confianza": "●",
+    "confianza media": "◐",
+    "confianza baja": "○",
 }
 
 

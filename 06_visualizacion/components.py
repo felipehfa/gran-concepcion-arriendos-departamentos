@@ -11,9 +11,9 @@ from streamlit_folium import st_folium
 from styles import (
     CONFIANZA_COLORS,
     CONFIANZA_LABELS,
+    CONFIANZA_SYMBOLS,
     ETIQUETA_COLORS,
     ETIQUETA_LABELS,
-    FOLIUM_ICON_COLOR,
 )
 
 def _clp(value: float) -> str:
@@ -79,7 +79,7 @@ def render_card(row: pd.Series) -> None:
                     {ETIQUETA_LABELS.get(etiqueta, etiqueta)}
                 </span>
                 <span class="badge" style="background-color:{CONFIANZA_COLORS.get(confianza, '#888')}">
-                    Confianza {CONFIANZA_LABELS.get(confianza, confianza)}
+                    {CONFIANZA_SYMBOLS.get(confianza, '')} Confianza {CONFIANZA_LABELS.get(confianza, confianza)}
                 </span>
             </div>
             <p class="card-title">{titulo}</p>
@@ -97,6 +97,19 @@ def render_card(row: pd.Series) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _pin_icon(color: str) -> folium.DivIcon:
+    # Pin propio (círculo + punta) en vez de folium.Icon: su paleta fija de
+    # colores con nombre no permite igualar los hex exactos de las tarjetas.
+    svg = f"""
+    <svg xmlns="http://www.w3.org/2000/svg" width="26" height="38" viewBox="0 0 26 38">
+        <path d="M13 0C5.8 0 0 5.8 0 13c0 9.7 13 25 13 25s13-15.3 13-25C26 5.8 20.2 0 13 0z"
+              fill="{color}" stroke="#FFFFFF" stroke-width="2"/>
+        <circle cx="13" cy="13" r="5" fill="#FFFFFF"/>
+    </svg>
+    """
+    return folium.DivIcon(html=svg, icon_size=(26, 38), icon_anchor=(13, 38))
 
 
 def render_map(df: pd.DataFrame) -> None:
@@ -123,7 +136,7 @@ def render_map(df: pd.DataFrame) -> None:
             location=(row["latitud"], row["longitud"]),
             popup=folium.Popup(popup_html, max_width=250),
             tooltip=titulo,
-            icon=folium.Icon(color=FOLIUM_ICON_COLOR.get(row["etiqueta"], "gray")),
+            icon=_pin_icon(ETIQUETA_COLORS.get(row["etiqueta"], "#888")),
         ).add_to(m)
 
     st_folium(m, use_container_width=True, height=720, returned_objects=[])
