@@ -1,8 +1,8 @@
-name: Orquestador cada 6h - Producción
+name: Orquestador cada 4h - Producción
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # 4 corridas al día, en punto (UTC)
+    - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
   workflow_dispatch:         # permite correrlo manualmente desde la pestaña Actions
 
 permissions:
