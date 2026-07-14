@@ -13,25 +13,7 @@ producción vigente (**LightGBM**) logra **MAE 48.901 CLP / MAPE 8.57% / R² 0.8
 reducción de MAE del 61% frente al baseline de media de train y del 38% frente a un "precio de
 mercado ingenuo" (precio/m² × superficie).
 
-## Por qué este proyecto es técnicamente interesante
-
-- **Se detectó y corrigió fuga de datos (data leakage)** en la variable más predictiva del
-  modelo (`precio_m2` de sector): la primera versión usaba el precio de la propia fila del
-  aviso, inflando artificialmente el desempeño (MAPE ~3.6%, señal de alerta, no de buen
-  resultado). Ver [3.1 Fuga de datos en `precio_m2`](#31-fuga-de-datos-en-precio_m2).
-- **Se encontró y corrigió un bug de escala en `gastos_comunes`** que afectaba al 72% del
-  histórico (perdía el separador de miles chileno: `"82.000"` se leía como `82.0` en vez de
-  `82000.0`), con impacto medible y verificado en las métricas del modelo antes/después del fix.
-  Ver [3.3 El bug de `gastos_comunes`](#33-el-bug-de-gastos_comunes-impacto-medible-en-el-modelo).
-- **Selección de variables por estabilidad**, no por importancia de un único modelo: 30 modelos
-  con K-Fold aleatorio + SHAP + regla de 1 error estándar sobre la curva de MAE de validación,
-  para no depender de una partición con suerte.
-- **Selección de algoritmo y etiquetado automáticos para producción**: un script compara los
-  JSON de métricas de XGBoost/LightGBM y elige el ganador sin intervención manual; el sistema de
-  etiquetado "oportunidad/caro" reporta además un nivel de confianza por aviso según cuánto
-  discrepan entre sí los 10 modelos del ensamble de bagging.
-
-### 🔎 Visualización interactiva
+![Buscador de oportunidades de arriendo — Gran Concepción](docs/images/dashboard-screenshot.png)
 
 **[gran-concepcion-arriendos-departamentos.streamlit.app](https://gran-concepcion-arriendos-departamentos.streamlit.app)**
 — explora las predicciones y etiquetas sobre los avisos vigentes.
