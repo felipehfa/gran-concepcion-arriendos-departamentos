@@ -183,6 +183,10 @@ def _migrar_esquema_avisos_detalle(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE avisos_detalle ADD COLUMN c_ig_com REAL")
         con.commit()
 
+    if "fecha_publicacion_precision" not in columnas:
+        con.execute("ALTER TABLE avisos_detalle ADD COLUMN fecha_publicacion_precision TEXT")
+        con.commit()
+
 
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
     """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
@@ -229,6 +233,7 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             descripcion                    TEXT,
             fecha_publicacion_texto        TEXT,
             fecha_publicacion_aprox        TEXT,
+            fecha_publicacion_precision    TEXT,
             superficie_total_m2            REAL,
             superficie_util_m2             REAL,
             dormitorios                    INTEGER,
