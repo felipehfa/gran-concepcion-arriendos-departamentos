@@ -26,8 +26,9 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-MODEL_METRICS_DIR = REPO_ROOT / "04_modelamiento" / "save" / "model"
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+MODEL_METRICS_DIR = INVESTIGACION_ROOT / "04_modelamiento" / "save" / "model"
 
 METRICS_PATHS = {
     "xgboost": MODEL_METRICS_DIR / "xgboost_regression_precio_metrics.json",

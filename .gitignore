@@ -12,7 +12,7 @@ venv/
 .claude/
 
 # Datos grandes
-01_obtener_datos/datos_vulnerabilidad/
+investigacion/01_obtener_datos/datos_vulnerabilidad/
 
 # tipos de archivos
 *.log
@@ -22,8 +22,8 @@ venv/
 # o un backfill) - pesados y de un solo uso, no deben versionarse
 *.bak-*
 
-# EDA inicial de los datos 
-01_EDA.ipynb
+# EDA inicial de los datos
+investigacion/02_analisis_exploratorio/01_EDA.ipynb
 
 # Documento que se usará en otro proyecto
 DATABRICKS_EVALUACION.md

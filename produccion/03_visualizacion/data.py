@@ -8,9 +8,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = REPO_ROOT / "05_modelo_produccion" / "produccion_gran_concepcion.db"
-INGENIERIA_VARIABLES_PATH = REPO_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PRODUCCION_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = PRODUCCION_ROOT.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+DB_PATH = PRODUCCION_ROOT / "01_modelo_produccion" / "produccion_gran_concepcion.db"
+INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
 
 AMENITY_COLUMNS = {
     "amoblado": "Amoblado",

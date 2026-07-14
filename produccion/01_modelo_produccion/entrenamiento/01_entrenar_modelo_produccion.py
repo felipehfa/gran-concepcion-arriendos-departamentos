@@ -51,13 +51,14 @@ from sklearn.model_selection import train_test_split
 # (nombre empieza con dígito, no se puede hacer un `import` normal).
 # ------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
 
 ALGORITMO_SELECCIONADO_PATH = SCRIPT_DIR / "algoritmo_seleccionado.json"
 
 MODULOS_INVESTIGACION = {
-    "xgboost": REPO_ROOT / "04_modelamiento" / "01_xgboost.py",
-    "lightgbm": REPO_ROOT / "04_modelamiento" / "02_lightgbm.py",
+    "xgboost": INVESTIGACION_ROOT / "04_modelamiento" / "01_xgboost.py",
+    "lightgbm": INVESTIGACION_ROOT / "04_modelamiento" / "02_lightgbm.py",
 }
 # Atributo bajo el cual cada módulo expone su propia librería de boosting
 # (para poder imprimir su versión sin hardcodear un solo algoritmo).

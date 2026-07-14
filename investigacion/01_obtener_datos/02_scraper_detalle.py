@@ -56,7 +56,7 @@ NOTAS IMPORTANTES:
   reintenta automáticamente (ver REINTENTOS_TRAS_ERROR) antes de darlo por
   fallido EN ESTA corrida. El manejo de fallos persistentes ENTRE corridas
   (para no reintentar para siempre un aviso realmente eliminado) vive en
-  05_modelo_produccion/02_scraper_detalle_incremental.py, vía el contador
+  produccion/01_modelo_produccion/02_scraper_detalle_incremental.py, vía el contador
   `intentos_fallidos_detalle` - este script original (de exploración inicial,
   sin ese contador) simplemente deja el aviso pendiente para la próxima vez.
 - Igual que con el otro scraper: revisa el robots.txt / Términos de Uso antes
@@ -114,7 +114,7 @@ COOLDOWN_TRAS_CAPTCHA_MINUTOS = 60   # tiempo mínimo de espera antes de reinten
 # de la MISMA corrida - un fallo aislado puede ser transitorio y no
 # reproducirse al reintentar segundos después. No confundir con el
 # manejo de fallos PERSISTENTES entre corridas (eso vive en
-# 05_modelo_produccion/02_scraper_detalle_incremental.py).
+# produccion/01_modelo_produccion/02_scraper_detalle_incremental.py).
 REINTENTOS_TRAS_ERROR = 2          # reintentos adicionales tras el primer intento (total = 1 + este valor)
 BACKOFF_REINTENTO_MIN = 3.0        # segundos de espera antes de cada reintento
 BACKOFF_REINTENTO_MAX = 6.0
@@ -916,7 +916,7 @@ def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
     antes de darlo por fallido EN ESTA corrida.
 
     La reutilizan tanto main() (este script) como
-    05_modelo_produccion/02_scraper_detalle_incremental.py (vía `sd.` sobre
+    produccion/01_modelo_produccion/02_scraper_detalle_incremental.py (vía `sd.` sobre
     este módulo), para no duplicar la lógica de fetch+reintento.
 
     Devuelve un dict con:
