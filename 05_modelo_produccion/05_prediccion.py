@@ -1,15 +1,16 @@
 """
 Cálculo de precio predicho, confianza y etiqueta — pipeline de producción.
 
-Toma las features calculadas por la Etapa 6 (`04_ingenieria_variables_produccion.py`),
-predice con el ensamble de `modelo_produccion.pkl` (Etapa 1), y aplica la
-calibración de oportunidad/confianza guardada en `parametros_produccion.json`
-(bordes de deciles de precio + mediana/MAD de error por decil + terciles de
-CV) para etiquetar cada aviso, sin necesitar recalcular esos bordes con una
-sola fila nueva (imposible: qcut necesita una distribución).
+Toma las features calculadas por `04_ingenieria_variables_produccion.py`,
+predice con el ensamble de `modelo_produccion.pkl` (generado por
+`entrenamiento/01_entrenar_modelo_produccion.py`), y aplica la calibración de
+oportunidad/confianza guardada en `parametros_produccion.json` (bordes de
+deciles de precio + mediana/MAD de error por decil + terciles de CV) para
+etiquetar cada aviso, sin necesitar recalcular esos bordes con una sola fila
+nueva (imposible: qcut necesita una distribución).
 
 El modelo vigente puede ser XGBoost o LightGBM (lo decide
-`seleccionar_algoritmo.py`, ver Tarea 1/3) — `cargar_modelo_y_calibracion`
+`seleccionar_algoritmo.py`) — `cargar_modelo_y_calibracion`
 lee el campo "algoritmo" de `parametros_produccion.json` y carga solo el
 script de investigación correspondiente, para usar SU `predict_ensemble_matrix`
 (mismo nombre en ambos módulos, pero cada uno sabe predecir con su propia
@@ -80,8 +81,8 @@ def cargar_modelo_y_calibracion() -> dict:
     siempre se puede recuperar, no solo su identificador.
 
     El algoritmo con el que predecir se determina leyendo el campo
-    "algoritmo" de parametros_produccion.json (Tarea 3) — no se asume
-    XGBoost. modelo_produccion.pkl guarda {"algoritmo": ..., "modelos": [...]},
+    "algoritmo" de parametros_produccion.json — no se asume XGBoost.
+    modelo_produccion.pkl guarda {"algoritmo": ..., "modelos": [...]},
     así que de paso se valida que ambas fuentes coincidan.
     """
     control = json.loads((ENTRENAMIENTO_DIR / "version_modelo.json").read_text(encoding="utf-8"))

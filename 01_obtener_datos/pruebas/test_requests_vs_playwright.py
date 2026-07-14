@@ -1,9 +1,12 @@
 """
-PRUEBA DE CONCEPTO (aislada) - requests vs Playwright para Portal Inmobiliario.
+Diagnóstico de equivalencia: requests vs Playwright para Portal Inmobiliario.
 
-Pregunta que responde este script: si nunca nos ha bloqueado ni ha aparecido
-CAPTCHA, ¿el HTML/JSON que devuelve una llamada `requests.get()` simple
-(sin navegador, sin JavaScript) es equivalente al que devuelve Playwright?
+Verifica que el HTML/JSON que devuelve una llamada `requests.get()` simple
+(sin navegador, sin JavaScript) sea equivalente al que devuelve Playwright,
+para una muestra de avisos y para la grilla. Sirve para confirmar que la ruta
+principal (requests) y la de respaldo (Playwright, usada en
+02_scraper_detalle.py cuando la principal queda bloqueada) producen el mismo
+resultado.
 
 Este script NO modifica 01_scraper_grilla.py ni 02_scraper_detalle.py, y no
 escribe nada en avisos_gran_concepcion.db. Solo:
@@ -12,22 +15,20 @@ escribe nada en avisos_gran_concepcion.db. Solo:
     scrapers para aplicar EXACTAMENTE la misma lógica de parseo a HTML
     obtenido por las dos vías, en vez de reimplementar el parseo aquí.
 
-IMPORTANTE sobre el "control" de Playwright para la grilla:
-  01_scraper_grilla.py YA usa requests (no Playwright) - la grilla nunca
-  necesitó Playwright. Así que para la URL de grilla, el "control" Playwright
-  de este script no reutiliza nada de 01_scraper_grilla.py (no hay lógica
-  Playwright ahí que reutilizar): se arma con el mismo User-Agent/stealth/
-  timeout que usa 02_scraper_detalle.py, solo para tener un punto de
-  comparación con navegador real también en ese caso.
+Sobre el "control" de Playwright para la grilla:
+  01_scraper_grilla.py usa requests (no Playwright) para la ruta principal.
+  Así que, para la URL de grilla, el control de Playwright de este script no
+  reutiliza lógica de 01_scraper_grilla.py: se arma con el mismo User-Agent/
+  stealth/timeout que usa 02_scraper_detalle.py, solo para tener también ahí
+  un punto de comparación con navegador real.
 
-NOTA sobre "texto visible" para requests:
+Sobre el "texto visible" para requests:
   Los regex de características (dormitorios, baños, superficie) en
   02_scraper_detalle.py se aplican sobre `page.locator("body").inner_text()`
   (texto ya renderizado por el navegador), no sobre el HTML crudo. Como
   `requests` no ejecuta JavaScript, se usa BeautifulSoup(html).get_text()
-  como aproximación al texto visible. Si el sitio es SSR (probable, ya que
-  el JSON de estado viene embebido en el HTML inicial), este texto debería
-  coincidir; si no coincide, es en sí mismo un hallazgo relevante.
+  como aproximación al texto visible; en un sitio SSR (el JSON de estado
+  viene embebido en el HTML inicial) este texto debería coincidir.
 
 Sin dependencias nuevas: requests, bs4/lxml, playwright y playwright-stealth
 ya están en uso por los scrapers existentes.

@@ -18,25 +18,21 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 #
-# Adaptación del pipeline de selección de variables (originalmente para
-# series de tiempo con horizontes de forecasting) a un problema de
-# regresión de corte transversal (precio de arriendo/venta por aviso).
-#
-# Cambios respecto al script original:
-#   - No hay dimensión temporal: el split train/val es un hold-out
-#     aleatorio (train_test_split), no una ventana de fechas.
-#   - La CV de estabilidad usa KFold(shuffle=True) en vez de
-#     TimeSeriesSplit con gap (no hay fuga hacia adelante que evitar).
-#   - Se elimina el paso de PSI train→val: PSI mide drift de distribución
-#     entre dos ventanas temporales distintas; con un split aleatorio de
-#     la misma población no aporta información (ambas muestras vienen de
-#     la misma distribución por construcción).
-#   - Se elimina la deduplicación intra-familia por sufijos (_lag/_ma/...)
-#     y la diversificación por dominio: no aplican a este dataset y el
-#     usuario pidió no usarlas. Solo queda la red de seguridad de
-#     correlación final (Paso 4 del original).
+# Selección de variables para un problema de regresión de corte transversal
+# (precio de arriendo/venta por aviso), sin dimensión temporal:
+#   - El split train/val es un hold-out aleatorio (train_test_split), no
+#     una ventana de fechas.
+#   - La CV de estabilidad usa KFold(shuffle=True): no hay fuga hacia
+#     adelante que evitar al no existir una dimensión temporal.
+#   - No se calcula PSI train→val: PSI mide drift de distribución entre dos
+#     ventanas temporales distintas, y con un split aleatorio de la misma
+#     población no aporta información (ambas muestras vienen de la misma
+#     distribución por construcción).
+#   - No hay deduplicación intra-familia por sufijos (_lag/_ma/...) ni
+#     diversificación por dominio: no aplican a este dataset. Solo queda la
+#     red de seguridad de correlación final (Paso 4).
 #   - Métricas de la curva k: MAE, RMSE y R² (más estándar para precios
-#     que sMAPE, que se usaba para variables de conteo).
+#     que sMAPE, que sirve para variables de conteo).
 
 # Rutas relativas a la ubicación del script (no al directorio de trabajo
 # actual), para que funcione igual sin importar desde dónde se ejecute

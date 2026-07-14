@@ -15,8 +15,7 @@ Diferencias respecto al scraper original:
   - Guarda SOLO avisos cuyo id_aviso no exista ya en la base ORIGINAL
     (avisos_gran_concepcion.db, solo lectura) NI en la base de PRODUCCIÓN.
   - Corte por MAX_PAGINAS_VACIAS_CONSECUTIVAS páginas seguidas sin ningún
-    aviso nuevo (antes: 1 sola página completa de duplicados), contado por
-    combinación comuna×tipo.
+    aviso nuevo, contado por combinación comuna×tipo.
   - Techo de presupuesto por corrida (MAX_PAGINAS_POR_CORRIDA /
     MAX_MINUTOS_POR_CORRIDA), acumulado sobre TODA la corrida: si se
     alcanza antes que el criterio de páginas vacías, corta la corrida

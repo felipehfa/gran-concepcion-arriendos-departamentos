@@ -4,8 +4,8 @@ Entrenamiento del modelo de PRODUCCIÓN.
 No duplica la lógica de modelamiento: carga como módulo (vía importlib, ya
 que su nombre empieza con dígito) el script de investigación del algoritmo
 GANADOR — `04_modelamiento/01_xgboost.py` o `04_modelamiento/02_lightgbm.py`,
-según lo que haya decidido `seleccionar_algoritmo.py` (Tarea 1) y quedó
-registrado en `algoritmo_seleccionado.json` — y reutiliza sus funciones
+según lo que haya decidido `seleccionar_algoritmo.py` y quedó registrado en
+`algoritmo_seleccionado.json` — y reutiliza sus funciones
 (optimización de hiperparámetros, bagging, evaluación, SHAP). Solo se carga
 y entrena el algoritmo elegido; el otro no se toca, para no duplicar el
 costo de Optuna innecesariamente. Los dos scripts de investigación exponen
@@ -47,8 +47,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 # ------------------------------------------------------------------
-# Carga del script de investigación del algoritmo GANADOR (Tarea 1) como
-# módulo (nombre empieza con dígito, no se puede hacer un `import` normal).
+# Carga del script de investigación del algoritmo GANADOR como módulo
+# (nombre empieza con dígito, no se puede hacer un `import` normal).
 # ------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -163,7 +163,7 @@ def guardar_control_version(control: dict, control_path: Path = CONTROL_VERSION_
 
 # ------------------------------------------------------------------
 # Calibración de oportunidad/confianza — para poder etiquetar avisos NUEVOS
-# en producción (Etapa 7) de forma consistente con el test set, en vez de
+# en producción (05_prediccion.py) de forma consistente con el test set, en vez de
 # recalcular deciles/terciles de una sola fila (imposible: qcut necesita una
 # distribución). A diferencia de `etiquetar_oportunidades` en
 # 04_modelamiento/01_xgboost.py (que aplica los bordes calculados a ESE

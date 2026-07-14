@@ -103,7 +103,7 @@ CARPETA_SCRIPT = Path(__file__).resolve().parent
 BD_PRINCIPAL = CARPETA_SCRIPT / "avisos_gran_concepcion.db"
 
 DELAY_MIN = 2.0   # segundos entre cada visita a un aviso individual
-DELAY_MAX = 4.0   # (validado con una corrida de volumen de 150 requests seguidas, sin señales de bloqueo)
+DELAY_MAX = 4.0
 
 LIMITE_POR_CORRIDA = 2000   # avisos a procesar como máximo en UNA ejecución del script
                           # (usa cron para correrlo varias veces al día en vez de subir esto mucho)
@@ -111,8 +111,8 @@ LIMITE_POR_CORRIDA = 2000   # avisos a procesar como máximo en UNA ejecución d
 COOLDOWN_TRAS_CAPTCHA_MINUTOS = 60   # tiempo mínimo de espera antes de reintentar tras un bloqueo
 
 # Reintentos ante un fallo de red/HTTP (ej. 404) al visitar UN aviso, dentro
-# de la MISMA corrida - confirmado que un 404 aislado puede ser transitorio
-# (no reproducible al reintentar segundos después). No confundir con el
+# de la MISMA corrida - un fallo aislado puede ser transitorio y no
+# reproducirse al reintentar segundos después. No confundir con el
 # manejo de fallos PERSISTENTES entre corridas (eso vive en
 # 05_modelo_produccion/02_scraper_detalle_incremental.py).
 REINTENTOS_TRAS_ERROR = 2          # reintentos adicionales tras el primer intento (total = 1 + este valor)
@@ -165,21 +165,17 @@ RE_SUPERFICIE_UTIL = re.compile(r"Superficie útil\s*([\d.,]+)\s*m", re.IGNORECA
 # tarjetas de OTROS avisos con "N dormitorios" en minúscula (ej. "3
 # dormitorios\n2 baños\n84 m² útiles"), mientras que la sección de
 # características del aviso actual trae "Dormitorios" con mayúscula DESPUÉS
-# del número (ej. "Dormitorios\n3"). Con IGNORECASE, re.search encontraba
-# primero una tarjeta del carrusel y capturaba el número que viene después de
-# "dormitorios" ahí — que es la cantidad de baños de ESE OTRO aviso, no los
-# dormitorios del aviso actual (mismo bug que RE_BANOS, ver más abajo).
-# Matchear solo "Dormitorios" con D mayúscula evita el carrusel por completo.
+# del número (ej. "Dormitorios\n3"). Matchear solo "Dormitorios" con D
+# mayúscula evita que re.search capture, desde una tarjeta del carrusel, un
+# número que no corresponde al aviso actual.
 RE_DORMITORIOS = re.compile(r"Dormitorios\s*(\d+)")
 
 # Sin IGNORECASE a propósito: la insignia superior de la página trae "N
 # baños" en minúscula ANTES del número (ej. "2 baños\n75 m² totales"),
 # mientras que la sección de características trae "Baños" con mayúscula
-# DESPUÉS del número (ej. "Baños\n2"). Con IGNORECASE, re.search encontraba
-# primero la insignia y capturaba el número que viene después de "baños"
-# ahí — que es la superficie total, no la cantidad real de baños (bug
-# confirmado en ~48% de las filas de avisos_detalle). Matchear solo "Baños"
-# con B mayúscula evita la insignia por completo.
+# DESPUÉS del número (ej. "Baños\n2"). Matchear solo "Baños" con B mayúscula
+# evita que re.search capture, desde la insignia, la superficie total en
+# vez de la cantidad real de baños.
 RE_BANOS = re.compile(r"Baños\s*(\d+)")
 RE_ESTACIONAMIENTOS = re.compile(r"Estacionamientos:?\s*(\d+)", re.IGNORECASE)
 RE_ANTIGUEDAD = re.compile(r"Antigüedad\s*(\d+)\s*años?", re.IGNORECASE)
@@ -198,9 +194,8 @@ RE_BODEGAS = re.compile(r"Bodegas\s*(\d+)", re.IGNORECASE)
 # líneas separadas - que es el que este patrón captura normalmente.
 # RE_GASTOS_COMUNES_RESUMEN es un FALLBACK explícito (no se usa por defecto):
 # hay avisos donde la sección de características simplemente no incluye este
-# campo, pero la insignia superior sí trae el monto (confirmado en vivo, ver
-# investigación de gastos_comunes) - sin este fallback esos casos quedan
-# NULL aunque el dato exista en la página.
+# campo, pero la insignia superior sí trae el monto - sin este fallback esos
+# casos quedan NULL aunque el dato exista en la página.
 RE_GASTOS_COMUNES = re.compile(r"Gastos comunes:?\s*\$?\s*([\d.,]+)", re.IGNORECASE)
 RE_GASTOS_COMUNES_RESUMEN = re.compile(r"Gastos comunes\s+desde\s*\$?\s*([\d.,]+)", re.IGNORECASE)
 RE_ESTACIONAMIENTO_VISITAS = re.compile(r"Estacionamiento de visitas:?\s*(Sí|No)", re.IGNORECASE)

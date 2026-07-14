@@ -38,7 +38,8 @@ resetea el contador a 0.
 
 El guardado usa UPSERT (ON CONFLICT DO UPDATE) en vez de INSERT OR REPLACE:
 así una re-visita nunca borra las columnas de vulnerabilidad
-(uv_rsh/rank_nac/pob_rsh_uv/p_urbano) que llena la Etapa 5 aparte.
+(uv_rsh/rank_nac/pob_rsh_uv/p_urbano) que llena `03_vulnerabilidad_produccion.py`
+aparte.
 """
 
 import importlib.util
@@ -177,19 +178,17 @@ CAMPOS_REALES = ["superficie_total_m2", "superficie_util_m2", "latitud", "longit
 # los deja 1000 veces más chicos (82.000 -> 82.0). Además, cuando el
 # arrendador declara los gastos comunes como incluidos en el arriendo, el
 # sitio no deja el campo vacío: muestra un valor simbólico SIN separador de
-# miles (ej. "1", "10") - eso no es un monto, es un placeholder de "incluido"
-# (confirmado contra HTML en vivo: MLC-4164894602 muestra "Gastos comunes: 1
-# CLP" en la tabla de características mientras la descripción del aviso dice
-# textualmente "Gastos comunes incluidos"). Se mapea a 0 (mismo tratamiento
-# que un $0 CLP explícito: no hay costo adicional separado del arriendo) en
-# vez de agregar una columna booleona aparte - la distinción "incluido" vs
+# miles (ej. "1", "10") - eso no es un monto, es un placeholder de "incluido".
+# Se mapea a 0 (mismo tratamiento que un $0 CLP explícito: no hay costo
+# adicional separado del arriendo) en vez de agregar una columna booleana
+# aparte - la distinción "incluido" vs
 # "$0 explícito" no cambia nada para el modelo (misma carga mensual real:
 # cero), y siempre se puede reconstruir después desde el texto crudo si hace
 # falta para otro fin.
 UMBRAL_PLACEHOLDER_INCLUIDO_CLP = 1000
 
 # Techo de sanidad: gastos comunes reales en el Gran Concepción no superan
-# este monto (el máximo verificado en el histórico corregido es $300.000).
+# este monto (el máximo observado en la base es $300.000).
 # Un valor por sobre esto -sea porque el sitio mostró el texto sin separador
 # de miles y era genuinamente enorme, sea porque el propio arrendador
 # escribió un número sin sentido en el campo (ej. "1.111.111", visto una vez

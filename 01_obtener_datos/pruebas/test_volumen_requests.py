@@ -1,18 +1,17 @@
 """
-PRUEBA DE CONCEPTO (aislada) - volumen con requests para Portal Inmobiliario.
+Diagnóstico de volumen: requests para Portal Inmobiliario.
 
-La prueba anterior (test_requests_vs_playwright.py) confirmó que, para 6 URLs
-aisladas, requests devuelve HTML/JSON equivalente a Playwright. Esta prueba
-NO vuelve a comparar equivalencia de contenido: se enfoca en una pregunta
-distinta - ¿un volumen mayor de requests SEGUIDAS (150, con delays 2-4s)
+Verifica si un volumen alto de requests SEGUIDAS (150, con delays 2-4s)
 genera algún cambio de comportamiento (bloqueo, CAPTCHA, rate limiting,
-respuestas distintas) respecto a las primeras requests de la corrida?
+respuestas distintas) respecto a las primeras requests de la corrida. No
+compara equivalencia de contenido entre requests y Playwright - para eso está
+test_requests_vs_playwright.py.
 
 No modifica 02_scraper_detalle.py ni escribe nada en avisos_gran_concepcion.db:
 solo LEE 150 URLs de muestra (estratificada por comuna/tipo_propiedad) de la
 tabla `avisos`, y hace fetch de cada una solo con requests. Opcionalmente
-compara una submuestra de 10 contra Playwright, solo como control adicional
-de que no hay divergencia sistemática (no es el foco de esta prueba).
+compara una submuestra de 10 contra Playwright, como control adicional de que
+no hay divergencia sistemática (no es el foco de este diagnóstico).
 
 Sin dependencias nuevas: requests y bs4 ya están en uso por 01_scraper_grilla.py.
 """

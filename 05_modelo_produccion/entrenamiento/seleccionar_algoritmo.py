@@ -6,8 +6,8 @@ investigación (04_modelamiento/save/model/*_metrics.json).
 No reentrena nada: solo lee los resultados de test ya reportados por
 04_modelamiento/01_xgboost.py y 04_modelamiento/02_lightgbm.py, y deja
 registrada la decisión en `algoritmo_seleccionado.json` (junto a
-`version_modelo.json`), para que 01_entrenar_modelo_produccion.py (Tarea 3)
-sepa qué script de investigación cargar sin tener que comparar nada él mismo.
+`version_modelo.json`), para que 01_entrenar_modelo_produccion.py sepa qué
+script de investigación cargar sin tener que comparar nada él mismo.
 
 Criterio por defecto: "ponderado" (50% MAE test + 50% RMSE test). Como MAE y
 RMSE viven en escalas distintas, cada métrica se normaliza dividiendo por el

@@ -16,7 +16,7 @@ geometría ya guardada como WKT (en EPSG:4326).
 A diferencia de la base original (que guarda `vulnerabilidad_uv` y
 `avisos_igvust` como tablas de referencia separadas), acá el resultado del
 cruce se resuelve DIRECTO a columnas de `avisos_detalle`
-(uv_rsh, rank_nac, pob_rsh_uv, p_urbano, c_ig_com) — ver esquema de la Etapa 2.
+(uv_rsh, rank_nac, pob_rsh_uv, p_urbano, c_ig_com) — ver esquema en `db.py`.
 
 Incremental: solo procesa avisos con coordenadas y uv_rsh todavía NULL. Una
 vez resuelto, no se vuelve a tocar (el cruce no cambia salvo que el
@@ -114,8 +114,7 @@ def resolver_vulnerabilidad(con, poligonos: list, pendientes: pd.DataFrame) -> d
         punto = Point(fila["longitud"], fila["latitud"])
         # Primera Unidad Vecinal cuyo polígono contiene el punto (no
         # deberían solaparse entre sí, pero por seguridad nos quedamos con
-        # la primera coincidencia, igual que antes con
-        # drop_duplicates(keep="first") sobre el resultado de gpd.sjoin).
+        # la primera coincidencia).
         encontrado = next((p for p in poligonos if p["geometria"].contains(punto)), None)
 
         if encontrado is None:
