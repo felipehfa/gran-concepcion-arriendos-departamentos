@@ -15,136 +15,160 @@ mercado ingenuo" (precio/m² × superficie).
 
 ![Buscador de oportunidades de arriendo — Gran Concepción](docs/images/dashboard-screenshot.png)
 
-**[gran-concepcion-arriendos-departamentos.streamlit.app](https://gran-concepcion-arriendos-departamentos.streamlit.app)**
+**[gran-concepcion-arriendos-departamentos.streamlit.app](https://gran-concepcion-arriendos.streamlit.app/)**
 — explora las predicciones y etiquetas sobre los avisos vigentes.
 
 ---
 
 ## 1. Arquitectura del pipeline
 
+El repo separa dos mundos: `investigacion/` (etapas 01-04, donde se scrapea, exploran y entrenan
+los modelos candidatos) y `produccion/` (pipeline independiente que corre solo, con su propia base
+de datos, más el dashboard). Ver sección 2 para el porqué de esta separación y sección 9 para el
+detalle del pipeline de producción.
+
 ```
-01_obtener_datos/
-  01_scraper_grilla.py                  → tabla `avisos`               (requests + BeautifulSoup)
-  02_scraper_detalle.py                 → tabla `avisos_detalle`       (requests; Playwright solo como respaldo)
-  03_vulnerabilidad_socioterritorial.py → tablas `vulnerabilidad_uv`,
-                                           `avisos_igvust`               (geopandas, cruce espacial)
-        │  (todo persiste en avisos_gran_concepcion.db, SQLite)
-        ▼
-02_analisis_exploratorio/
-  01_EDA.ipynb                          → exploración manual de los datos crudos
-        ▼
-03_ingenieria_variables/
-  01_ingenieria_variables.py            → datos_ingenieria_variables.csv (1.628 filas × 42 features)
-  02_seleccion_variables.py             → selected_features.csv          (32 features finales)
-        ▼
-04_modelamiento/
-  01_xgboost.py          → bagging ×10 + etiquetado oportunidad/caro
-  02_lightgbm.py         → bagging ×10 + etiquetado oportunidad/caro (misma API que 01_xgboost.py)
-        ▼
-05_modelo_produccion/   → pipeline de producción, separado e independiente (sección 9)
-  entrenamiento/seleccionar_algoritmo.py         → compara xgboost vs lightgbm (JSON de métricas
-                                                    de investigación) y elige el algoritmo ganador
-  entrenamiento/01_entrenar_modelo_produccion.py → entrena el algoritmo ganador, modelo versionado
-                                                    (85/15 + calibración)
-  00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
-  01_scraper_grilla_incremental.py               → tabla `avisos`          (produccion_gran_concepcion.db)
-  02_scraper_detalle_incremental.py              → tabla `avisos_detalle` + estado_publicacion
-  03_vulnerabilidad_produccion.py                → columnas de vulnerabilidad en `avisos_detalle`
-  04_ingenieria_variables_produccion.py          → features de avisos nuevos (contra referencia histórica)
-  05_prediccion.py                               → tabla `predicciones` (precio + etiqueta + confianza)
-        │  (produccion_gran_concepcion.db, solo lectura desde acá en adelante)
-        ▼
-06_visualizacion/       → dashboard Streamlit, sección 10
-  app.py                → tarjetas filtrables + mapa (st.tabs: Buscador / Cómo funciona)
+investigacion/
+  01_obtener_datos/
+    01_scraper_grilla.py                  → tabla `avisos`               (requests + BeautifulSoup)
+    02_scraper_detalle.py                 → tabla `avisos_detalle`       (requests; Playwright solo como respaldo)
+    03_vulnerabilidad_socioterritorial.py → tablas `vulnerabilidad_uv`,
+                                             `avisos_igvust`               (geopandas, cruce espacial)
+          │  (todo persiste en avisos_gran_concepcion.db, SQLite)
+          ▼
+  02_analisis_exploratorio/
+    01_EDA.ipynb                          → exploración manual de los datos crudos
+          ▼
+  03_ingenieria_variables/
+    01_ingenieria_variables.py            → datos_ingenieria_variables.csv (1.628 filas × 42 features)
+    02_seleccion_variables.py             → selected_features.csv          (32 features finales)
+          ▼
+  04_modelamiento/
+    01_xgboost.py          → bagging ×10 + etiquetado oportunidad/caro
+    02_lightgbm.py         → bagging ×10 + etiquetado oportunidad/caro (misma API que 01_xgboost.py)
+
+produccion/
+  01_modelo_produccion/   → pipeline de producción, separado e independiente (sección 9)
+    entrenamiento/seleccionar_algoritmo.py         → compara xgboost vs lightgbm (JSON de métricas
+                                                      de investigación) y elige el algoritmo ganador
+    entrenamiento/01_entrenar_modelo_produccion.py → entrena el algoritmo ganador, modelo versionado
+                                                      (85/15 + calibración)
+    00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
+    01_scraper_grilla_incremental.py               → tabla `avisos`          (produccion_gran_concepcion.db)
+    02_scraper_detalle_incremental.py              → tabla `avisos_detalle` + estado_publicacion
+    03_vulnerabilidad_produccion.py                → columnas de vulnerabilidad en `avisos_detalle`
+    04_ingenieria_variables_produccion.py          → features de avisos nuevos (contra referencia histórica)
+    05_prediccion.py                               → tabla `predicciones` (precio + etiqueta + confianza)
+          │  (produccion_gran_concepcion.db, solo lectura desde acá en adelante)
+          ▼
+  02_pruebas/             → prototipos/validación manual sobre el modelo de producción (no es pipeline)
+  03_visualizacion/       → dashboard Streamlit, sección 10
+    app.py                → tarjetas filtrables + mapa (st.tabs: Buscador / Cómo funciona)
 ```
 
 Cada script ancla sus rutas de entrada/salida a la ubicación del propio archivo (no al
 directorio de trabajo actual), por lo que pueden ejecutarse desde la raíz del repo o desde su
-propia carpeta indistintamente.
+propia carpeta indistintamente. Los scripts de `produccion/` que reutilizan lógica de
+`investigacion/` (vía `importlib`, ya que los nombres empiezan con dígitos) cruzan ese límite
+apuntando explícitamente a `investigacion/...` desde su propia ubicación — ver sección 9.
 
-La base de datos SQLite (`01_obtener_datos/avisos_gran_concepcion.db`, ~4 MB) **está versionada
-en el repo**, ya con los datos scrapeados y las tablas de vulnerabilidad resueltas — no hace
-falta correr los scrapers desde cero para reproducir la ingeniería de variables y el
+La base de datos SQLite (`investigacion/01_obtener_datos/avisos_gran_concepcion.db`, ~4 MB) **está
+versionada en el repo**, ya con los datos scrapeados y las tablas de vulnerabilidad resueltas — no
+hace falta correr los scrapers desde cero para reproducir la ingeniería de variables y el
 modelamiento (ver [Quick start](#12-quick-start)).
 
 > El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers de
-> **investigación** (`01_obtener_datos/`) sí recolectan casas, pero la etapa de ingeniería de
-> variables filtra y trabaja solo con `tipo_propiedad = "departamento"`. El scraper de grilla de
-> **producción** va un paso más allá y directamente **no recorre casas**, ya que el resto del
-> pipeline de producción las descartaría de todas formas — evita gastar presupuesto de scraping
-> en avisos que nunca generan features ni predicción (ver
+> **investigación** (`investigacion/01_obtener_datos/`) sí recolectan casas, pero la etapa de
+> ingeniería de variables filtra y trabaja solo con `tipo_propiedad = "departamento"`. El scraper
+> de grilla de **producción** va un paso más allá y directamente **no recorre casas**, ya que el
+> resto del pipeline de producción las descartaría de todas formas — evita gastar presupuesto de
+> scraping en avisos que nunca generan features ni predicción (ver
 > [CHANGELOG.md](CHANGELOG.md#producción-dejar-de-scrapear-casas)).
 
 ---
 
 ## 2. Estructura de carpetas
 
+El repo separa `investigacion/` (etapas 01-04: scraping de investigación, exploración,
+ingeniería de variables y comparación de modelos candidatos) de `produccion/` (pipeline
+independiente que corre solo vía cron, más el dashboard) — dos mundos con una sola base de datos
+de investigación (`avisos_gran_concepcion.db`, versionada) y una de producción
+(`produccion_gran_concepcion.db`, actualizada por el orquestador). Los scripts de `produccion/`
+reutilizan funciones de `investigacion/` vía `importlib` (sección 9) en vez de duplicar lógica de
+parsing/extracción; los nombres de carpeta dentro de `produccion/` se renumeraron de 01 a 03 al
+separarla de `investigacion/`, ya que dejó de ser continuación secuencial de la numeración 01-04.
+
 ```
 gran-concepcion-rentals/
-├── 01_obtener_datos/
-│   ├── 01_scraper_grilla.py
-│   ├── 02_scraper_detalle.py
-│   ├── 03_vulnerabilidad_socioterritorial.py
-│   ├── avisos_gran_concepcion.db          # SQLite, versionado en el repo
-│   └── datos_vulnerabilidad/              # shapefile IGVUST, NO versionado (.gitignore)
+├── investigacion/
+│   ├── 01_obtener_datos/
+│   │   ├── 01_scraper_grilla.py
+│   │   ├── 02_scraper_detalle.py
+│   │   ├── 03_vulnerabilidad_socioterritorial.py
+│   │   ├── avisos_gran_concepcion.db          # SQLite, versionado en el repo
+│   │   └── datos_vulnerabilidad/              # shapefile IGVUST, NO versionado (.gitignore)
+│   │
+│   ├── 02_analisis_exploratorio/
+│   │   └── 01_EDA.ipynb
+│   │
+│   ├── 03_ingenieria_variables/
+│   │   ├── 01_ingenieria_variables.py
+│   │   ├── 02_seleccion_variables.py
+│   │   └── save/
+│   │       ├── ingeniaria_variables/
+│   │       │   ├── datos_ingenieria_variables.csv
+│   │       │   ├── niveles_barrio.json
+│   │       │   └── modelos_superficie/*.pkl   # RandomForest de IMPUTACIÓN de superficie (no es el
+│   │       │                                  # modelo de precio, ver sección 3.4)
+│   │       └── seleccion_variables/
+│   │           ├── selected_features.csv
+│   │           └── seleccion_variables_reporte.json
+│   │
+│   └── 04_modelamiento/
+│       ├── 01_xgboost.py
+│       ├── 02_lightgbm.py
+│       └── save/model/
+│           ├── xgboost_regression_precio.pkl               # ensamble de 10 modelos
+│           ├── xgboost_regression_precio_metrics.json
+│           ├── xgboost_regression_precio_oportunidades_*.csv
+│           ├── lightgbm_regression_precio.pkl
+│           ├── lightgbm_regression_precio_metrics.json
+│           └── lightgbm_regression_precio_oportunidades_*.csv
 │
-├── 02_analisis_exploratorio/
-│   └── 01_EDA.ipynb
-│
-├── 03_ingenieria_variables/
-│   ├── 01_ingenieria_variables.py
-│   ├── 02_seleccion_variables.py
-│   └── save/
-│       ├── ingeniaria_variables/
-│       │   ├── datos_ingenieria_variables.csv
-│       │   ├── niveles_barrio.json
-│       │   └── modelos_superficie/*.pkl   # RandomForest de IMPUTACIÓN de superficie (no es el
-│       │                                  # modelo de precio, ver sección 3.4)
-│       └── seleccion_variables/
-│           ├── selected_features.csv
-│           └── seleccion_variables_reporte.json
-│
-├── 04_modelamiento/
-│   ├── 01_xgboost.py
-│   ├── 02_lightgbm.py
-│   └── save/model/
-│       ├── xgboost_regression_precio.pkl               # ensamble de 10 modelos
-│       ├── xgboost_regression_precio_metrics.json
-│       ├── xgboost_regression_precio_oportunidades_*.csv
-│       ├── lightgbm_regression_precio.pkl
-│       ├── lightgbm_regression_precio_metrics.json
-│       └── lightgbm_regression_precio_oportunidades_*.csv
-│
-├── 05_modelo_produccion/          # pipeline de producción, sección 9
-│   ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
-│   ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
-│   ├── 01_scraper_grilla_incremental.py
-│   ├── 02_scraper_detalle_incremental.py
-│   ├── 03_vulnerabilidad_produccion.py
-│   ├── migrar_poligonos_vulnerabilidad.py       # migración manual/local: shapefile -> tabla poligonos_vulnerabilidad_uv
-│   ├── 04_ingenieria_variables_produccion.py
-│   ├── 05_prediccion.py
-│   ├── requirements.txt                         # dependencias pineadas para GitHub Actions (sin geopandas ni playwright)
-│   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
-│   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
-│   └── entrenamiento/
-│       ├── seleccionar_algoritmo.py             # compara xgboost vs lightgbm, elige ganador
-│       ├── algoritmo_seleccionado.json          # decisión persistida (algoritmo + métricas)
-│       ├── 01_entrenar_modelo_produccion.py     # entrena el algoritmo ganador
-│       ├── version_modelo.json                  # contador + historial de versiones
-│       └── versiones/{version}/
-│           ├── modelo_produccion.pkl
-│           └── parametros_produccion.json
-│
-└── 06_visualizacion/               # dashboard Streamlit, sección 10
-    ├── app.py                                   # entrypoint: st.tabs (Buscador / Cómo funciona)
-    ├── data.py                                  # query + join + estandarización de precio
-    ├── filters.py                               # sidebar de filtros + lógica de filtrado
-    ├── components.py                            # tarjetas de aviso + mapa folium
-    ├── explicacion.py                           # contenido de la pestaña "Cómo funciona"
-    ├── styles.py                                # paleta de colores + CSS compartido
-    ├── requirements.txt
-    └── .streamlit/config.toml                   # tema forzado a claro
+└── produccion/
+    ├── 01_modelo_produccion/          # pipeline de producción, sección 9
+    │   ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
+    │   ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
+    │   ├── 01_scraper_grilla_incremental.py
+    │   ├── 02_scraper_detalle_incremental.py
+    │   ├── 03_vulnerabilidad_produccion.py
+    │   ├── migrar_poligonos_vulnerabilidad.py       # migración manual/local: shapefile -> tabla poligonos_vulnerabilidad_uv
+    │   ├── 04_ingenieria_variables_produccion.py
+    │   ├── 05_prediccion.py
+    │   ├── requirements.txt                         # dependencias pineadas para GitHub Actions (sin geopandas ni playwright)
+    │   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
+    │   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
+    │   └── entrenamiento/
+    │       ├── seleccionar_algoritmo.py             # compara xgboost vs lightgbm, elige ganador
+    │       ├── algoritmo_seleccionado.json          # decisión persistida (algoritmo + métricas)
+    │       ├── 01_entrenar_modelo_produccion.py     # entrena el algoritmo ganador
+    │       ├── version_modelo.json                  # contador + historial de versiones
+    │       └── versiones/{version}/
+    │           ├── modelo_produccion.pkl
+    │           └── parametros_produccion.json
+    │
+    ├── 02_pruebas/                     # prototipos/validación manual, no forma parte del pipeline
+    │   └── prototipo_prediccion_manual.py
+    │
+    └── 03_visualizacion/               # dashboard Streamlit, sección 10
+        ├── app.py                                   # entrypoint: st.tabs (Buscador / Cómo funciona)
+        ├── data.py                                  # query + join + estandarización de precio
+        ├── filters.py                               # sidebar de filtros + lógica de filtrado
+        ├── components.py                            # tarjetas de aviso + mapa folium
+        ├── explicacion.py                           # contenido de la pestaña "Cómo funciona"
+        ├── styles.py                                # paleta de colores + CSS compartido
+        ├── requirements.txt
+        └── .streamlit/config.toml                   # tema forzado a claro
 ```
 
 ---
@@ -160,7 +184,7 @@ alerta, no de buen desempeño, ya que el modelo estaba viendo (indirectamente) l
 debía predecir.
 
 La corrección, implementada en `agregar_precio_m2_sector`
-(`03_ingenieria_variables/01_ingenieria_variables.py`), calcula el precio/m² de cada aviso
+(`investigacion/03_ingenieria_variables/01_ingenieria_variables.py`), calcula el precio/m² de cada aviso
 usando **solo comparables de OTRAS propiedades** dentro de un radio de 300 metros (excluyendo la
 fila propia), con:
 - filtro de outliers vía IQR (multiplicador ×3) sobre el precio/m² del sector antes de promediar,
@@ -269,7 +293,7 @@ sincronización durante la migración a producción, etc.) está en
 
 ## 4. Features del modelo final (32)
 
-Seleccionadas por `03_ingenieria_variables/02_seleccion_variables.py` a partir de 42 features
+Seleccionadas por `investigacion/03_ingenieria_variables/02_seleccion_variables.py` a partir de 42 features
 candidatas (ver sección 6 para la metodología de selección). Mismas 32 features para XGBoost y
 LightGBM (ambos se comparan sobre exactamente el mismo set, ver sección 7).
 
@@ -308,7 +332,7 @@ error en casos extremos, mejoró de ~2.7 a ~2.1 tras la limpieza de datos), prob
 `log(precio_clp)` como target (descartado, sin mejora) y revisó manualmente los casos de error
 más extremo para descartar errores de datos frente a variabilidad genuina de mercado.
 
-La **etapa de refinamiento** (la que definió la versión final, en `04_modelamiento/`) introdujo:
+La **etapa de refinamiento** (la que definió la versión final, en `investigacion/04_modelamiento/`) introdujo:
 
 - **Split estratificado por quintil de precio**, en reemplazo de un split aleatorio simple que
   mostraba inestabilidad severa entre corridas.
@@ -343,7 +367,7 @@ La **etapa de refinamiento** (la que definió la versión final, en `04_modelami
 
 ## 6. Selección de variables (metodología)
 
-`03_ingenieria_variables/02_seleccion_variables.py` reduce 42 features candidatas a las 32
+`investigacion/03_ingenieria_variables/02_seleccion_variables.py` reduce 42 features candidatas a las 32
 finales en 4 pasos:
 
 1. **Eliminación de constantes**: features con varianza ≈ 0 sobre train. En la corrida
@@ -414,8 +438,9 @@ como advertencia (ver sección 9.1), sin que cambie la decisión final.
 
 A diferencia de etapas anteriores del proyecto (con Random Forest como tercera opción, ver
 sección 5), el pipeline actual **no fija editorialmente un "modelo final" único** en
-investigación: los dos scripts de `04_modelamiento/` se entrenan y evalúan en paralelo sobre las
-mismas 32 features, y `05_modelo_produccion/entrenamiento/seleccionar_algoritmo.py` decide de
+investigación: los dos scripts de `investigacion/04_modelamiento/` se entrenan y evalúan en
+paralelo sobre las mismas 32 features, y
+`produccion/01_modelo_produccion/entrenamiento/seleccionar_algoritmo.py` decide de
 forma automática cuál entrena el modelo de **producción**, comparando los JSON de métricas de
 test más recientes con un criterio ponderado (50% MAE + 50% RMSE, normalizado). Con la corrida
 vigente, el ganador es **LightGBM**, por un margen relativo de apenas **0.72%** — ver sección
@@ -429,7 +454,7 @@ es, además, la base del sistema de etiquetado de la sección 8.
 
 ## 8. Sistema de etiquetado "oportunidad / caro"
 
-Implementado en ambos scripts de `04_modelamiento/` (`01_xgboost.py` y `02_lightgbm.py`, misma
+Implementado en ambos scripts de `investigacion/04_modelamiento/` (`01_xgboost.py` y `02_lightgbm.py`, misma
 lógica en los dos), sobre el ensamble de bagging propio de cada uno (los 10 modelos, no un
 modelo único) y solo para el set de test. Los números de esta sección corresponden a
 **LightGBM** (el algoritmo vigente en producción, ver sección 7).
@@ -464,7 +489,7 @@ casos de **baja** confianza (25 de 47 ≈ 53% vs. 16 de 30 ≈ 53%) — a difere
 anteriores del proyecto, en esta el modelo es igual de consistente identificando gangas que
 sobreprecios.
 
-Los resultados se exportan a `04_modelamiento/save/model/` con un prefijo por algoritmo
+Los resultados se exportan a `investigacion/04_modelamiento/save/model/` con un prefijo por algoritmo
 (`xgboost_regression_precio_*` y `lightgbm_regression_precio_*`, cada script genera el suyo):
 - `..._oportunidades_test.csv` (detalle fila por fila)
 - `..._oportunidades_resumen_decil.csv` (conteo por decil de precio)
@@ -472,9 +497,9 @@ Los resultados se exportan a `04_modelamiento/save/model/` con un prefijo por al
 
 ---
 
-## 9. Pipeline de producción (`05_modelo_produccion/`)
+## 9. Pipeline de producción (`produccion/01_modelo_produccion/`)
 
-Sistema separado e independiente de `01_obtener_datos/` a `04_modelamiento/`: usa su **propia
+Sistema separado e independiente de `investigacion/01_obtener_datos/` a `investigacion/04_modelamiento/`: usa su **propia
 base de datos** (`produccion_gran_concepcion.db`), nunca escribe en `avisos_gran_concepcion.db`
 (la trata como fuente de solo lectura), y está pensado para correr sin intervención manual vía
 cron, agregando avisos nuevos y sus predicciones día a día.
@@ -482,7 +507,7 @@ cron, agregando avisos nuevos y sus predicciones día a día.
 ### 9.1 Selección de algoritmo y entrenamiento
 
 **`entrenamiento/seleccionar_algoritmo.py`** — no reentrena nada: lee los JSON de métricas de
-test más recientes de `04_modelamiento/01_xgboost.py` y `02_lightgbm.py`, valida que sean
+test más recientes de `investigacion/04_modelamiento/01_xgboost.py` y `02_lightgbm.py`, valida que sean
 comparables (mismas features/seed/tamaño de test) y elige un ganador por criterio ponderado (50%
 MAE + 50% RMSE test, normalizado — ver sección 7), advirtiendo si el ganador global no es el
 mejor en Q5. Decisión persistida en `algoritmo_seleccionado.json`.
@@ -547,7 +572,7 @@ error.
 
 ---
 
-## 10. Visualización (`06_visualizacion/`)
+## 10. Visualización (`produccion/03_visualizacion/`)
 
 Dashboard Streamlit de solo lectura sobre `produccion_gran_concepcion.db`: **nunca escribe** en
 las tablas de negocio (`avisos`, `avisos_detalle`, `predicciones`) — la única escritura que hace
@@ -640,9 +665,9 @@ Con los datos ya incluidos en el repo (no hace falta scrapear desde cero):
 
 ```bash
 pip install pandas numpy scikit-learn joblib xgboost lightgbm optuna scipy
-python 03_ingenieria_variables/01_ingenieria_variables.py
-python 03_ingenieria_variables/02_seleccion_variables.py
-python 04_modelamiento/02_lightgbm.py   # entrenamiento + etiquetado oportunidad/caro
+python investigacion/03_ingenieria_variables/01_ingenieria_variables.py
+python investigacion/03_ingenieria_variables/02_seleccion_variables.py
+python investigacion/04_modelamiento/02_lightgbm.py   # entrenamiento + etiquetado oportunidad/caro
 ```
 
 Para el detalle de dependencias por etapa, scraping desde cero y cómo correr el dashboard, ver

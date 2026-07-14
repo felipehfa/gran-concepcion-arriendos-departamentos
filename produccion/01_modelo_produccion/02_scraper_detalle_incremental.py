@@ -70,8 +70,9 @@ MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200
 MAX_INTENTOS_FALLIDOS_DETALLE = 5
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-SCRAPER_DETALLE_ORIGINAL_PATH = REPO_ROOT / "01_obtener_datos" / "02_scraper_detalle.py"
+REPO_ROOT = SCRIPT_DIR.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+SCRAPER_DETALLE_ORIGINAL_PATH = INVESTIGACION_ROOT / "01_obtener_datos" / "02_scraper_detalle.py"
 
 
 def _cargar_modulo_scraper_detalle():

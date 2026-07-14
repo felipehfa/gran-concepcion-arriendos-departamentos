@@ -6,7 +6,7 @@ hoy" ni "Publicado esta semana", solo "Publicado hace ..."). Ya corregido en
 campos con la lógica ya arreglada.
 
 Es un script de migración de una sola corrida (mismo patrón que
-05_modelo_produccion/migracion_historico_a_produccion.py). Bórralo después
+produccion/01_modelo_produccion/migracion_historico_a_produccion.py). Bórralo después
 de correrlo si ya no lo necesitas.
 """
 

@@ -1,9 +1,9 @@
 """
 Esquema y conexión de la base de datos de PRODUCCIÓN
-(05_modelo_produccion/produccion_gran_concepcion.db).
+(produccion/01_modelo_produccion/produccion_gran_concepcion.db).
 
 Este módulo NO scrapea ni calcula nada — solo define las tablas y ofrece
-helpers de conexión, para que el resto de los scripts de 05_modelo_produccion/
+helpers de conexión, para que el resto de los scripts de produccion/01_modelo_produccion/
 lo importen (`from db import ...`).
 
 Tablas:
@@ -34,10 +34,11 @@ import sqlite3
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
 
 RUTA_BD_PRODUCCION = SCRIPT_DIR / "produccion_gran_concepcion.db"
-RUTA_BD_ORIGINAL = REPO_ROOT / "01_obtener_datos" / "avisos_gran_concepcion.db"
+RUTA_BD_ORIGINAL = INVESTIGACION_ROOT / "01_obtener_datos" / "avisos_gran_concepcion.db"
 
 # Mismas subcategorías de punto de interés que `SUBCATEGORIAS_POI.values()`
 # en `01_obtener_datos/02_scraper_detalle.py`. Se duplica esta lista (en vez
@@ -190,7 +191,7 @@ def _migrar_esquema_avisos_detalle(con: sqlite3.Connection) -> None:
 
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
     """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
-    Ningún script de 05_modelo_produccion/ debe escribir en esta base."""
+    Ningún script de produccion/01_modelo_produccion/ debe escribir en esta base."""
     uri = f"file:{ruta_bd.as_posix()}?mode=ro"
     return sqlite3.connect(uri, uri=True)
 

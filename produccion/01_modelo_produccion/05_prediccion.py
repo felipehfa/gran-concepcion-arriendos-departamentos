@@ -41,14 +41,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
 ENTRENAMIENTO_DIR = SCRIPT_DIR / "entrenamiento"
 
 MODULOS_INVESTIGACION = {
-    "xgboost": REPO_ROOT / "04_modelamiento" / "01_xgboost.py",
-    "lightgbm": REPO_ROOT / "04_modelamiento" / "02_lightgbm.py",
+    "xgboost": INVESTIGACION_ROOT / "04_modelamiento" / "01_xgboost.py",
+    "lightgbm": INVESTIGACION_ROOT / "04_modelamiento" / "02_lightgbm.py",
 }
-INGENIERIA_VARIABLES_PATH = REPO_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
 INGENIERIA_VARIABLES_PRODUCCION_PATH = SCRIPT_DIR / "04_ingenieria_variables_produccion.py"
 
 

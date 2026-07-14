@@ -50,8 +50,9 @@ MAX_MINUTOS_POR_CORRIDA = 30           # techo global de tiempo
 TIPOS_PROPIEDAD_PRODUCCION = ["departamento"]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-SCRAPER_GRILLA_ORIGINAL_PATH = REPO_ROOT / "01_obtener_datos" / "01_scraper_grilla.py"
+REPO_ROOT = SCRIPT_DIR.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+SCRAPER_GRILLA_ORIGINAL_PATH = INVESTIGACION_ROOT / "01_obtener_datos" / "01_scraper_grilla.py"
 
 
 def _cargar_modulo_scraper_grilla():

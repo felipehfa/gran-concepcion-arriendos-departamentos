@@ -38,9 +38,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-INGENIERIA_VARIABLES_PATH = REPO_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
-FEATURES_PATH = REPO_ROOT / "03_ingenieria_variables" / "save" / "seleccion_variables" / "selected_features.csv"
+REPO_ROOT = SCRIPT_DIR.parent.parent
+INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+FEATURES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "save" / "seleccion_variables" / "selected_features.csv"
 
 
 def _cargar_modulo_ingenieria_variables():

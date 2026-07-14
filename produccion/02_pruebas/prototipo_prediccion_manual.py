@@ -5,7 +5,7 @@ Permite ingresar a mano lat/lon + características de un departamento y
 obtener (a) el precio estimado por el ensamble de producción vigente y
 (b) la banda de precio que el sistema consideraría "precio de mercado" (ni
 oportunidad ni caro), reutilizando el modelo y la calibración ya entrenados
-en `05_modelo_produccion/` (sin duplicar esa lógica, vía importlib).
+en `produccion/01_modelo_produccion/` (sin duplicar esa lógica, vía importlib).
 
 No toca ningún archivo fuera de `05.1_pruebas/`. Vive aislado a propósito:
 es solo para validar la idea antes de integrarla a la app de Streamlit.
@@ -24,8 +24,8 @@ import pandas as pd
 from shapely.geometry import Point
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-MODELO_PRODUCCION_DIR = REPO_ROOT / "05_modelo_produccion"
+PRODUCCION_ROOT = SCRIPT_DIR.parent
+MODELO_PRODUCCION_DIR = PRODUCCION_ROOT / "01_modelo_produccion"
 
 # `05_prediccion.py` y sus dependencias (`db.py`, `04_ingenieria_variables_
 # produccion.py`) usan `import db` normal (no importlib) - eso solo resuelve
