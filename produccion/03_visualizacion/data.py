@@ -3,6 +3,7 @@
 import importlib.util
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -107,11 +108,25 @@ def load_data() -> pd.DataFrame:
     """
     # timeout alto: el orquestador puede estar escribiendo en la misma BD en
     # paralelo (una fila cada ~0.5s durante la etapa de predicción).
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    try:
-        df = pd.read_sql_query(_QUERY, conn)
-    finally:
-        conn.close()
+    #
+    # Reintentos: el workflow de GitHub Actions pushea la BD actualizada cada
+    # 4h, lo que gatilla un redeploy en Streamlit Cloud. Git escribe el archivo
+    # in-place (no via rename atómico), así que hay una ventana muy breve donde
+    # el checkout deja el archivo a medio escribir; si un request cae justo ahí,
+    # sqlite3 puede ver un archivo corrupto/truncado y lanzar OperationalError.
+    intentos = 3
+    for intento in range(1, intentos + 1):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            try:
+                df = pd.read_sql_query(_QUERY, conn)
+            finally:
+                conn.close()
+            break
+        except sqlite3.OperationalError:
+            if intento == intentos:
+                raise
+            time.sleep(2 * intento)
 
     if not df.empty:
         iv = _cargar_ingenieria_variables()
