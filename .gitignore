@@ -21,3 +21,9 @@ venv/
 # Backups puntuales de bases de datos (ej. antes de una migración de esquema
 # o un backfill) - pesados y de un solo uso, no deben versionarse
 *.bak-*
+
+# EDA inicial de los datos 
+01_EDA.ipynb
+
+# Documento que se usará en otro proyecto
+DATABRICKS_EVALUACION.md
