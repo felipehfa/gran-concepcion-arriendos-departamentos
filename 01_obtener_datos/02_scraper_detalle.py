@@ -157,7 +157,14 @@ def headers_requests(referer: str) -> dict:
 # específicos), buscando las etiquetas en español tal como las muestra el
 # sitio. Esto es más resistente a cambios de clases/estructura HTML.
 # ------------------------------------------------------------------
-RE_FECHA_PUBLICACION = re.compile(r"Publicado hace ([^\n\|]+)", re.IGNORECASE)
+# El sitio usa TRES formatos para "cuándo se publicó", según antigüedad:
+# "Publicado hoy" (día 0), "Publicado esta semana" (días 1-6, sin número
+# exacto) y "Publicado hace N día/semana/mes/año" (día 7+, con número
+# exacto). Antes este regex solo reconocía la tercera forma, así que "hoy" y
+# "esta semana" quedaban sin capturar (fecha_publicacion_texto y
+# fecha_publicacion_aprox NULL) pese a que el dato sí estaba en la página -
+# confirmado re-visitando en vivo cientos de avisos con este texto.
+RE_FECHA_PUBLICACION = re.compile(r"Publicado (hoy|esta semana|hace [^\n\|]+)", re.IGNORECASE)
 RE_SUPERFICIE_TOTAL = re.compile(r"Superficie total\s*([\d.,]+)\s*m", re.IGNORECASE)
 RE_SUPERFICIE_UTIL = re.compile(r"Superficie útil\s*([\d.,]+)\s*m", re.IGNORECASE)
 
@@ -300,6 +307,7 @@ def inicializar_bd(ruta_bd: Path = BD_PRINCIPAL) -> sqlite3.Connection:
             descripcion                 TEXT,
             fecha_publicacion_texto     TEXT,
             fecha_publicacion_aprox     TEXT,
+            fecha_publicacion_precision TEXT,
             superficie_total_m2         TEXT,
             superficie_util_m2          TEXT,
             dormitorios                 TEXT,
@@ -329,6 +337,15 @@ def inicializar_bd(ruta_bd: Path = BD_PRINCIPAL) -> sqlite3.Connection:
             fecha_scrapeo               TEXT
         )
     """)
+
+    # Migración: si la tabla ya existía de antes (con datos) sin esta
+    # columna, se agrega ahora - ALTER TABLE ADD COLUMN es seguro e
+    # inmediato en SQLite, no reescribe filas existentes (quedan con NULL,
+    # listas para que el backfill de fecha_publicacion las complete).
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(avisos_detalle)").fetchall()}
+    if "fecha_publicacion_precision" not in columnas:
+        con.execute("ALTER TABLE avisos_detalle ADD COLUMN fecha_publicacion_precision TEXT")
+
     con.commit()
     return con
 
@@ -354,6 +371,7 @@ def guardar_detalle(con: sqlite3.Connection, id_aviso: str, url: str, datos: dic
     """Inserta un aviso de detalle y hace commit inmediatamente (guardado incremental)."""
     columnas_base = [
         "id_aviso", "url", "descripcion", "fecha_publicacion_texto", "fecha_publicacion_aprox",
+        "fecha_publicacion_precision",
         "superficie_total_m2", "superficie_util_m2", "dormitorios", "banos", "estacionamientos",
         "antiguedad_anos", "amoblado", "admite_mascotas", "condominio_cerrado",
         "bodegas", "gastos_comunes", "estacionamiento_visitas", "solo_familias",
@@ -469,14 +487,35 @@ class PaginaHTMLEstatico:
 # EXTRACCIÓN
 # ------------------------------------------------------------------
 
+# Punto medio del rango empírico de "Publicado esta semana": revisando en
+# vivo cientos de avisos, el sitio nunca mostró "hace 7 días" pero sí "hace
+# 8, 9, 10, 11, 12 días" - o sea "esta semana" cubre exactamente los días
+# 1-6 (día 0 es "hoy", día 7+ ya trae número exacto). 3 es el punto medio de
+# ese rango (1+6)/2 = 3.5, redondeado hacia abajo.
+DIAS_ESTA_SEMANA = 3
+
+
 def parsear_fecha_relativa(texto: Optional[str]) -> Optional[str]:
     """
-    Convierte 'hace 3 meses' -> fecha aproximada (YYYY-MM-DD).
-    Es una aproximación (asume 30 días por mes, 365 por año) ya que el sitio
-    no muestra la fecha exacta en la página de detalle.
+    Convierte el texto de "Publicado ..." a una fecha aproximada (YYYY-MM-DD).
+    Es una aproximación ya que el sitio no muestra la fecha exacta en la
+    página de detalle:
+      - "hoy" -> 0 días (exacto)
+      - "esta semana" -> DIAS_ESTA_SEMANA días (convención: punto medio del
+        rango 1-6 días, ver comentario de la constante)
+      - "hace N día(s)/semana(s)/mes(es)/año(s)" -> N unidades exactas
+        (asume 30 días por mes, 365 por año)
     """
     if not texto:
         return None
+
+    texto_normalizado = texto.strip().lower()
+
+    if texto_normalizado == "hoy":
+        return date.today().isoformat()
+
+    if texto_normalizado == "esta semana":
+        return (date.today() - timedelta(days=DIAS_ESTA_SEMANA)).isoformat()
 
     m = re.search(r"(\d+)\s*(día|dias|semana|mes|meses|año|años)", texto, re.IGNORECASE)
     if not m:
@@ -497,6 +536,22 @@ def parsear_fecha_relativa(texto: Optional[str]) -> Optional[str]:
         return None
 
     return (date.today() - delta).isoformat()
+
+
+def determinar_precision_fecha(texto: Optional[str]) -> Optional[str]:
+    """
+    'exacta': el número de días detrás de fecha_publicacion_aprox es un
+    valor conocido con certeza ("hoy" = 0 días, o "hace N ..." = N unidades
+    tal como las muestra el sitio).
+    'aproximada_categoria': fecha_publicacion_aprox se obtuvo por convención
+    (punto medio de un rango), no de un número que el sitio haya mostrado -
+    hoy el único caso es "esta semana".
+    """
+    if not texto:
+        return None
+    if texto.strip().lower() == "esta semana":
+        return "aproximada_categoria"
+    return "exacta"
 
 
 def extraer_descripcion(page) -> Optional[str]:
@@ -732,6 +787,13 @@ def extraer_detalle(page) -> dict:
         gastos_comunes = buscar(RE_GASTOS_COMUNES_RESUMEN)
 
     fecha_texto = buscar(RE_FECHA_PUBLICACION)
+    # Con el regex anterior (solo reconocía "Publicado hace ..."), el grupo
+    # capturado para avisos "viejos" nunca incluía la palabra "hace" (ej.
+    # guardaba "11 días", no "hace 11 días"). Se normaliza acá para no
+    # cambiar el formato ya almacenado en miles de filas existentes; "hoy" y
+    # "esta semana" no llevan ese prefijo y quedan intactos.
+    if fecha_texto and fecha_texto.lower().startswith("hace "):
+        fecha_texto = fecha_texto[len("hace "):]
     coordenadas = extraer_coordenadas(page)
 
     estado = extraer_json_estado_pagina(page)
@@ -742,6 +804,7 @@ def extraer_detalle(page) -> dict:
         "descripcion": extraer_descripcion(page),
         "fecha_publicacion_texto": fecha_texto,
         "fecha_publicacion_aprox": parsear_fecha_relativa(fecha_texto),
+        "fecha_publicacion_precision": determinar_precision_fecha(fecha_texto),
         "superficie_total_m2": buscar(RE_SUPERFICIE_TOTAL),
         "superficie_util_m2": buscar(RE_SUPERFICIE_UTIL),
         "dormitorios": buscar(RE_DORMITORIOS),

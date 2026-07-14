@@ -332,6 +332,7 @@ def guardar_detalle_produccion(con, id_aviso: str, datos: dict) -> None:
     """
     columnas_base = [
         "descripcion", "fecha_publicacion_texto", "fecha_publicacion_aprox",
+        "fecha_publicacion_precision",
         "superficie_total_m2", "superficie_util_m2", "dormitorios", "banos", "estacionamientos",
         "antiguedad_anos", "amoblado", "admite_mascotas", "condominio_cerrado",
         "bodegas", "gastos_comunes", "estacionamiento_visitas", "solo_familias",
