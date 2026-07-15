@@ -680,3 +680,6 @@ Para el detalle de dependencias por etapa, scraping desde cero y cómo correr el
 - **[CHANGELOG.md](CHANGELOG.md)** — historial de la sesión de mantenimiento jul-2026: migración
   del histórico a producción, backfill de `gastos_comunes` fila por fila, e incidente de
   sincronización con Google Drive.
+- **[DATABRICKS_SETUP.md](DATABRICKS_SETUP.md)** — guía de aprendizaje para replicar el pipeline
+  en Databricks (bronce/plata/oro), como ejercicio personal aparte, **no reemplaza** el pipeline
+  de este repo.
