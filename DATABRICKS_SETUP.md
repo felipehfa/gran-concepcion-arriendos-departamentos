@@ -15,7 +15,7 @@ inferencia del modelo).
 |---|---|
 | Edición de Databricks | **Free Edition** (compute serverless, Unity Catalog activado por defecto, sin tarjeta de crédito) |
 | Scraper en Databricks | **Solo cargas manuales** — corrés el notebook a mano cuando quieras practicar, no reemplaza el cron de GitHub Actions |
-| Cruce de vulnerabilidad (IGVUST) | **Como dato ya resuelto** — se copian las columnas (`uv_rsh`, `rank_nac`, `pob_rsh_uv`, `p_urbano`, `c_ig_com`) tal como quedaron calculadas en SQLite, sin reimplementar el cruce espacial punto-en-polígono |
+| Cruce de vulnerabilidad (IGVUST) | **Tabla propia en Bronce** — se sube `poligonos_vulnerabilidad_uv` igual que `avisos`/`avisos_detalle`, y el cruce punto-en-polígono se replica en Plata (Python + shapely), en vez de copiar columnas ya resueltas |
 | Predicción con el modelo | **Fuera de alcance de esta guía** — queda para una segunda etapa, una vez que bronce/plata/oro estén andando |
 
 Como es un ejercicio de aprendizaje, esta guía prioriza que cada fase sea simple de verificar antes
@@ -55,23 +55,27 @@ features, no de Plata directamente) — no se cubre en esta guía.
 ## 3. Fase 1 — Bronce: cargar grilla + detalle
 
 **Origen recomendado**: `produccion/01_modelo_produccion/produccion_gran_concepcion.db`, tablas
-`avisos` y `avisos_detalle` (ver esquema en
+`avisos`, `avisos_detalle` y `poligonos_vulnerabilidad_uv` (ver esquema en
 [`db.py`](produccion/01_modelo_produccion/db.py)) — preferible a la base de investigación porque
-ya trae las columnas de vulnerabilidad resueltas en la misma fila, sin el join extra que tiene
+`avisos_detalle` ya trae columnas de coordenadas listas para el cruce, sin el join extra que tiene
 `avisos_gran_concepcion.db` contra `vulnerabilidad_uv`/`avisos_igvust`.
 
-1. Exportar ambas tablas a CSV o Parquet localmente (por ejemplo con `sqlite3` + `pandas`, en tu
-   máquina, fuera de Databricks — no hace falta que esto corra en la nube).
+1. Exportar las tres tablas a CSV o Parquet localmente (por ejemplo con `sqlite3` + `pandas`, en tu
+   máquina, fuera de Databricks — no hace falta que esto corra en la nube). En
+   `poligonos_vulnerabilidad_uv`, la columna `geometria_wkt` es texto plano (WKT), así que viaja
+   sin problema en CSV/Parquet igual que cualquier otra columna.
 2. Subir los archivos al Volume creado en el paso 2.3, vía drag-and-drop en la UI de **Catalog
    Explorer**.
 3. Usar el asistente **"Create table from file"** (o `CREATE TABLE ... AS SELECT * FROM
    read_files('/Volumes/gran_concepcion/bronce/landing/avisos.csv')`) para materializar
-   `gran_concepcion.bronce.avisos` y `gran_concepcion.bronce.avisos_detalle` como tablas Delta.
+   `gran_concepcion.bronce.avisos`, `gran_concepcion.bronce.avisos_detalle` y
+   `gran_concepcion.bronce.poligonos_vulnerabilidad_uv` como tablas Delta.
 4. Verificar recuento de filas contra la base SQLite de origen antes de seguir — si no coincide,
    revisar el export antes de tocar nada más.
 
-No hace falta migrar `poligonos_vulnerabilidad_uv` en esta fase (la vulnerabilidad queda como dato
-estático, sección 0).
+`poligonos_vulnerabilidad_uv` queda como tabla estática en Bronce (se re-sube a mano si el
+shapefile IGVUST de origen se actualiza, igual que en producción) — el cruce contra `avisos_detalle`
+recién se resuelve en Plata (sección 5).
 
 ---
 
@@ -121,9 +125,15 @@ separado por si conviene SQL o Python:
 - Imputación de superficie corrupta con `RandomForestRegressor` — necesita `scikit-learn`, sin
   traducción razonable a SQL. Corre como notebook Python normal (no requiere Spark), escribe el
   resultado de vuelta a la tabla Plata.
-
-Las columnas de vulnerabilidad (`uv_rsh`, `rank_nac`, `pob_rsh_uv`, `p_urbano`, `c_ig_com`) se
-copian tal cual desde Bronce — no hay recálculo en esta fase (sección 0).
+- El cruce punto-en-polígono de vulnerabilidad: mismo enfoque que
+  [`03_vulnerabilidad_produccion.py`](produccion/01_modelo_produccion/03_vulnerabilidad_produccion.py)
+  — leer `gran_concepcion.bronce.poligonos_vulnerabilidad_uv`, parsear `geometria_wkt` con
+  `shapely.wkt.loads`, y para cada aviso con coordenadas válidas encontrar el polígono que lo
+  contiene (`Point(longitud, latitud).within(...)`, o `geopandas.sjoin` si el volumen de datos lo
+  justifica) para resolver `uv_rsh`, `rank_nac`, `pob_rsh_uv`, `p_urbano`, `c_ig_com`. Igual que la
+  imputación de superficie, corre como notebook Python normal (no Spark, el dataset es chico) y
+  escribe el resultado a la tabla Plata — no hace falta `geopandas`/GDAL si te alcanza con
+  `shapely` puro sobre el WKT ya guardado.
 
 ---
 
