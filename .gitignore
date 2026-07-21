@@ -25,5 +25,3 @@ investigacion/01_obtener_datos/datos_vulnerabilidad/
 # EDA inicial de los datos
 investigacion/02_analisis_exploratorio/01_EDA.ipynb
 
-# Documento que se usará en otro proyecto
-DATABRICKS_EVALUACION.md
