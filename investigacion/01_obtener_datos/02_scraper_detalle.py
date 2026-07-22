@@ -832,6 +832,33 @@ def extraer_detalle(page) -> dict:
     }
 
 
+def _url_coincide_con_aviso(html: str, id_aviso: str) -> bool:
+    """
+    Confirma que la página descargada realmente corresponde a `id_aviso`, y no
+    a otra página (ej. el buscador) a la que el sitio a veces redirige cuando
+    el aviso ya fue eliminado - SIN devolver un status HTTP distinto de 200
+    (visto en producción: MLC-4146261150 responde 200 con el HTML de
+    /arriendo/departamento/propiedades-usadas, título y JSON de una página de
+    resultados, no de un aviso). Ese caso pasa de largo el chequeo de
+    `resp.status_code != 200` en `obtener_detalle_aviso`, así que hace falta
+    esta verificación de contenido aparte.
+
+    Exige que TANTO <link rel="canonical"> COMO <meta property="og:url">
+    contengan `id_aviso`: son dos tags independientes del <head>, así que
+    pedir que ambos coincidan reduce el riesgo de un falso positivo por un
+    solo tag ausente o inconsistente en una página que sí es del aviso.
+    """
+    soup = BeautifulSoup(html or "", "lxml")
+
+    canonical = soup.find("link", attrs={"rel": "canonical"})
+    canonical_href = canonical.get("href", "") if canonical else ""
+
+    og_url_tag = soup.find("meta", attrs={"property": "og:url"})
+    og_url = og_url_tag.get("content", "") if og_url_tag else ""
+
+    return id_aviso in canonical_href and id_aviso in og_url
+
+
 def hay_captcha(page) -> bool:
     """
     Detecta un bloqueo real, no solo la mención de la palabra "captcha".
@@ -908,7 +935,7 @@ def construir_referer(comuna: str, tipo_propiedad: str) -> str:
 # FETCH - ruta principal (requests)
 # ------------------------------------------------------------------
 
-def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
+def obtener_detalle_aviso(url: str, id_aviso: str, comuna: str, tipo_propiedad: str) -> dict:
     """
     Punto de entrada de alto nivel de la ruta principal: descarga el HTML del
     aviso vía requests, detecta CAPTCHA y extrae todos los campos - con
@@ -920,7 +947,7 @@ def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
     este módulo), para no duplicar la lógica de fetch+reintento.
 
     Devuelve un dict con:
-      "resultado": "ok" | "captcha" | "error"
+      "resultado": "ok" | "captcha" | "error" | "no_encontrado"
       "datos": dict de extraer_detalle() + distancias (solo si resultado == "ok")
       "estado_json": JSON de extraer_json_estado_pagina(), ya parseado (solo si
           resultado == "ok") - se expone para que un llamador (ej. el scraper
@@ -928,6 +955,13 @@ def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
           no tenga que volver a descargar la página para leerlo.
       "status_http": último código HTTP observado (o None si fue un error de red)
       "motivo": descripción corta del fallo (solo si resultado != "ok")
+
+    "no_encontrado" es distinto de "error": el fetch funcionó (status 200,
+    sin CAPTCHA) pero `_url_coincide_con_aviso` determinó que el HTML devuelto
+    no es el del aviso pedido - típicamente porque el aviso ya no existe y el
+    sitio respondió con otra página (ver esa función). No tiene sentido
+    reintentar (la misma URL va a devolver lo mismo), así que no pasa por el
+    loop de reintentos: se resuelve en el primer intento.
     """
     referer = construir_referer(comuna, tipo_propiedad)
     intentos_totales = 1 + REINTENTOS_TRAS_ERROR
@@ -947,6 +981,15 @@ def obtener_detalle_aviso(url: str, comuna: str, tipo_propiedad: str) -> dict:
 
             if hay_captcha(pagina):
                 return {"resultado": "captcha", "status_http": ultimo_status, "motivo": "captcha"}
+
+            if not _url_coincide_con_aviso(resp.text, id_aviso):
+                log.warning(f"La página descargada para {id_aviso} ({url}) no corresponde a ese aviso "
+                            f"(canonical/og:url no lo mencionan) - probablemente fue eliminado y el sitio "
+                            f"redirigió a otra página sin devolver un status distinto de 200.")
+                return {
+                    "resultado": "no_encontrado", "status_http": ultimo_status,
+                    "motivo": "la página devuelta no corresponde al aviso (probablemente eliminado)",
+                }
 
             datos = extraer_detalle(pagina)
             distancias = calcular_distancias_centro(datos.get("latitud"), datos.get("longitud"), comuna)
@@ -1009,7 +1052,7 @@ def main():
 
         log.info(f"Visitando {id_aviso}: {url}")
 
-        resultado = obtener_detalle_aviso(url, fila["comuna"], fila["tipo_propiedad"])
+        resultado = obtener_detalle_aviso(url, id_aviso, fila["comuna"], fila["tipo_propiedad"])
 
         if resultado["resultado"] == "captcha":
             log.error(f"CAPTCHA detectado en {url}. Deteniendo la corrida ahora mismo. "
@@ -1020,9 +1063,11 @@ def main():
             detenido_por_captcha = True
             break
 
-        if resultado["resultado"] == "error":
-            log.warning(f"No se pudo obtener {id_aviso} tras reintentos ({resultado['motivo']}). "
-                        f"Se salta este aviso (queda pendiente para la próxima corrida).")
+        if resultado["resultado"] in ("error", "no_encontrado"):
+            log.warning(f"No se pudo obtener {id_aviso} ({resultado['motivo']}). "
+                        f"Se salta este aviso (queda pendiente para la próxima corrida - este script "
+                        f"no lleva el contador de fallos persistentes, eso vive en el scraper "
+                        f"incremental de producción).")
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
             continue
 

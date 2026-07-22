@@ -36,6 +36,17 @@ significa "no pudimos scrapear su detalle tras varios intentos") y sale de
 la cola de pendientes. Un éxito posterior antes de llegar al umbral
 resetea el contador a 0.
 
+PÁGINA QUE YA NO ES EL AVISO (sin pasar por status HTTP != 200):
+Algunos avisos eliminados no dan 404: el sitio responde 200 con el HTML de
+otra página (ej. el buscador), sin que el status por sí solo lo delate. Para
+detectarlo, `obtener_detalle_aviso` verifica que <link rel="canonical"> y
+<meta property="og:url"> del HTML descargado mencionen el id_aviso pedido; si
+cualquiera de los dos no lo hace, devuelve "resultado": "no_encontrado". A
+diferencia de un fallo de red, acá no hace falta esperar a
+MAX_INTENTOS_FALLIDOS_DETALLE corridas: el aviso se marca
+`estado_publicacion='no_disponible'` de inmediato (ver `visitar_aviso`), ya
+que reintentar la misma URL no va a cambiar el resultado.
+
 El guardado usa UPSERT (ON CONFLICT DO UPDATE) en vez de INSERT OR REPLACE:
 así una re-visita nunca borra las columnas de vulnerabilidad
 (uv_rsh/rank_nac/pob_rsh_uv/p_urbano) que llena `03_vulnerabilidad_produccion.py`
@@ -409,7 +420,7 @@ def tiempo_restante_cooldown(con) -> timedelta:
 def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
     """
     Devuelve: 'ok', 'cambio_estado' (solo relevante en re-chequeo),
-    'captcha' o 'error'.
+    'no_disponible', 'captcha' o 'error'.
 
     Usa la ruta principal (requests) de 01_obtener_datos/02_scraper_detalle.py
     vía `sd.obtener_detalle_aviso`, que ya incluye reintento ante fallos
@@ -417,19 +428,33 @@ def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
     se suma 1 al contador `intentos_fallidos_detalle` de este aviso (fallo
     PERSISTENTE, entre corridas) y, si supera el umbral, se marca el aviso
     como 'no_disponible' para que salga de la cola de pendientes.
+
+    Si en cambio devuelve "no_encontrado" (fetch OK, pero el HTML descargado
+    no corresponde al aviso - ver `_url_coincide_con_aviso` en el módulo
+    original), el aviso se marca 'no_disponible' DE INMEDIATO, sin pasar por
+    el contador de intentos_fallidos_detalle: a diferencia de un error de
+    red/HTTP, acá ya se confirmó con contenido real que la URL no lleva al
+    aviso, así que no hay nada que un reintento vaya a cambiar.
     """
     id_aviso = fila["id_aviso"]
     url = fila["url"]
 
     log.info(f"{'Re-chequeando' if es_rechequeo else 'Visitando'} {id_aviso}: {url}")
 
-    resultado = sd.obtener_detalle_aviso(url, fila["comuna"], fila["tipo_propiedad"])
+    resultado = sd.obtener_detalle_aviso(url, id_aviso, fila["comuna"], fila["tipo_propiedad"])
 
     if resultado["resultado"] == "captcha":
         log.error(f"CAPTCHA detectado en {url}. Deteniendo la corrida ahora mismo. "
                   f"Cooldown de {COOLDOWN_TRAS_CAPTCHA_MINUTOS} minutos antes de la próxima.")
         registrar_captcha(con)
         return "captcha"
+
+    if resultado["resultado"] == "no_encontrado":
+        actualizar_estado_publicacion(con, id_aviso, "no_disponible")
+        log.warning(f"{id_aviso}: la página descargada no corresponde a este aviso ({resultado['motivo']}). "
+                    f"Se marca estado_publicacion='no_disponible' de inmediato.")
+        time.sleep(random.uniform(sd.DELAY_MIN, sd.DELAY_MAX))
+        return "no_disponible"
 
     if resultado["resultado"] == "error":
         nuevo_contador = db.incrementar_intentos_fallidos_detalle(con, id_aviso)
@@ -470,7 +495,7 @@ def scrapear_detalle_incremental(con) -> dict:
                     f"No se hace nada en esta corrida.")
         return {
             "nuevos_procesados": 0, "rechequeos_procesados": 0,
-            "cambios_estado": 0, "detenido_por_captcha": False,
+            "cambios_estado": 0, "no_disponibles_detectados": 0, "detenido_por_captcha": False,
         }
 
     pendientes_nuevos = obtener_pendientes_nuevos(con)
@@ -483,12 +508,13 @@ def scrapear_detalle_incremental(con) -> dict:
         log.info("Nada que hacer en esta corrida.")
         return {
             "nuevos_procesados": 0, "rechequeos_procesados": 0,
-            "cambios_estado": 0, "detenido_por_captcha": False,
+            "cambios_estado": 0, "no_disponibles_detectados": 0, "detenido_por_captcha": False,
         }
 
     nuevos_procesados = 0
     rechequeos_procesados = 0
     cambios_estado = 0
+    no_disponibles_detectados = 0
     detenido_por_captcha = False
 
     for _, fila in pendientes_nuevos.iterrows():
@@ -498,6 +524,8 @@ def scrapear_detalle_incremental(con) -> dict:
             break
         if resultado == "ok":
             nuevos_procesados += 1
+        if resultado == "no_disponible":
+            no_disponibles_detectados += 1
 
     if not detenido_por_captcha:
         for _, fila in pendientes_rechequeo.iterrows():
@@ -509,11 +537,20 @@ def scrapear_detalle_incremental(con) -> dict:
                 rechequeos_procesados += 1
             if resultado == "cambio_estado":
                 cambios_estado += 1
+            if resultado == "no_disponible":
+                # Para el propósito de este resumen, un re-chequeo que detecta
+                # que el aviso ya no existe cuenta como procesado Y como
+                # cambio de estado (pasó de 'activo' a 'no_disponible'), igual
+                # que 'cambio_estado' arriba.
+                rechequeos_procesados += 1
+                cambios_estado += 1
+                no_disponibles_detectados += 1
 
     return {
         "nuevos_procesados": nuevos_procesados,
         "rechequeos_procesados": rechequeos_procesados,
         "cambios_estado": cambios_estado,
+        "no_disponibles_detectados": no_disponibles_detectados,
         "detenido_por_captcha": detenido_por_captcha,
     }
 
@@ -527,5 +564,7 @@ if __name__ == "__main__":
         f"Corrida completa. Nuevos procesados: {resumen['nuevos_procesados']} | "
         f"Re-chequeados: {resumen['rechequeos_procesados']} | "
         f"Cambios de estado detectados: {resumen['cambios_estado']} | "
+        f"No disponibles detectados (página no coincide con el aviso): "
+        f"{resumen['no_disponibles_detectados']} | "
         f"Detenido por CAPTCHA: {resumen['detenido_por_captcha']}"
     )
