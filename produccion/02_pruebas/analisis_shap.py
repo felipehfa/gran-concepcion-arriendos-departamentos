@@ -23,10 +23,24 @@ Reutiliza (vía importlib, mismo patrón que prototipo_prediccion_manual.py):
     reconstruir el mismo test set (85/15) que se usó al entrenar esa versión,
     sin persistir el propio test set en disco en ningún lado del pipeline.
 
+Se probó además usar la librería externa `shap` (TreeExplainer) en vez de este
+cálculo nativo: sobre este mismo ensamble y test set, sus valores dan
+EXACTAMENTE los mismos números que `contribuciones_shap` de abajo (diferencia
+absoluta máxima = 0.0), así que no cambia ningún resultado — pero en esta
+máquina `import shap` crashea con `numpy==2.4.6` (la versión pinneada del
+proyecto; incompatibilidad de ABI nativa entre el wheel de `shap==0.51.0` y
+esa build de numpy, no arreglable reinstalando ni con la última versión
+disponible), y su parte gráfica (matplotlib) además choca con una política de
+Control de Aplicaciones de Windows en este equipo. Por eso `graficar_beeswarm`
+de abajo reimplementa un beeswarm plot con matplotlib puro (que sí funciona
+en este entorno) directamente sobre `shap_matrix`, sin depender de `shap`.
+
 Salidas (no versionadas, se regeneran corriendo el script):
   - save/analisis_shap/shap_importancia.csv   (tabla completa, 29 features)
-  - save/analisis_shap/shap_importancia.png   (gráfico, copia local)
-  - docs/images/shap_importancia.png          (gráfico, para README/Streamlit)
+  - save/analisis_shap/shap_importancia.png   (gráfico de barras, copia local)
+  - save/analisis_shap/shap_beeswarm.png      (beeswarm, copia local)
+  - docs/images/shap_importancia.png          (gráfico de barras, para README/Streamlit)
+  - docs/images/shap_beeswarm.png             (beeswarm, para README/Streamlit)
 
 CÓMO CORRERLO:
     python 02_pruebas/analisis_shap.py
@@ -163,6 +177,99 @@ def graficar(resumen: pd.DataFrame, version: str, n_test: int, top_n: int = 15) 
     plt.close(fig)
 
 
+def _densidad_gaussiana(valores: np.ndarray) -> np.ndarray:
+    """
+    Densidad estimada (kernel gaussiano, regla de Silverman para el ancho de
+    banda) en cada uno de los propios `valores` — equivalente a
+    `scipy.stats.gaussian_kde(valores)(valores)`, implementado a mano en numpy
+    puro para no depender de `scipy.linalg.cholesky` (ver nota en
+    `graficar_beeswarm`). O(n²), trivial para los ~245 avisos de test.
+    """
+    n = len(valores)
+    std = valores.std()
+    ancho_banda = 1.06 * std * n ** (-1 / 5)
+    diffs = (valores[:, None] - valores[None, :]) / ancho_banda
+    return np.exp(-0.5 * diffs ** 2).sum(axis=1) / (n * ancho_banda * np.sqrt(2 * np.pi))
+
+
+def graficar_beeswarm(
+    features: list, X_test: pd.DataFrame, shap_matrix: np.ndarray, version: str, n_test: int, top_n: int = 15,
+) -> None:
+    """
+    Beeswarm plot (un punto por aviso de test, por feature) reimplementado con
+    matplotlib puro — ver nota del módulo sobre por qué no se usa la librería
+    `shap` para esto. Cada punto es la contribución SHAP de esa feature para
+    ese aviso (eje X) y su color es el valor crudo de la feature en ese aviso
+    (azul = bajo, rojo = alto, normalizado por percentiles 5-95 para que un
+    outlier no aplaste la escala de color) — permite leer de un vistazo si
+    "valor alto de la feature" empuja el costo hacia arriba o hacia abajo, y
+    qué tan dispersa es esa relación (a diferencia del gráfico de barras, que
+    solo muestra el promedio).
+
+    El jitter vertical dentro de cada fila es proporcional a la densidad local
+    de puntos en el eje X (kernel gaussiano, implementado a mano — ver
+    `_densidad_gaussiana` abajo, en vez de `scipy.stats.gaussian_kde`: en esta
+    máquina `scipy.linalg.cholesky`, que `gaussian_kde` usa internamente,
+    crashea con la misma incompatibilidad nativa de numpy==2.4.6 que afecta a
+    `shap`, sección de arriba), para simular el efecto de "enjambre" sin
+    implementar el algoritmo de packing exacto que usa `shap`.
+    """
+    import matplotlib.pyplot as plt
+
+    mean_abs = np.abs(shap_matrix).mean(axis=0)
+    orden = np.argsort(-mean_abs)[:top_n][::-1]  # más importante arriba
+
+    cmap = plt.get_cmap("coolwarm")
+    rng = np.random.default_rng(42)
+
+    fig, ax = plt.subplots(figsize=(9, 0.42 * len(orden) + 2))
+    for fila, feat_i in enumerate(orden):
+        valores_shap = shap_matrix[:, feat_i]
+        valores_crudos = X_test.iloc[:, feat_i].to_numpy(dtype=float)
+
+        p5, p95 = np.percentile(valores_crudos, [5, 95])
+        color_val = np.full_like(valores_crudos, 0.5) if p95 <= p5 else np.clip(
+            (valores_crudos - p5) / (p95 - p5), 0, 1,
+        )
+
+        if valores_shap.std() > 0:
+            densidad = _densidad_gaussiana(valores_shap)
+            densidad = densidad / densidad.max()
+        else:
+            densidad = np.zeros_like(valores_shap)
+        jitter = (rng.random(len(valores_shap)) - 0.5) * densidad * 0.85
+
+        ax.scatter(
+            valores_shap, fila + jitter, c=color_val, cmap=cmap, vmin=0, vmax=1,
+            s=13, alpha=0.75, edgecolors="none", zorder=2,
+        )
+
+    ax.axvline(0, color="#B0B0B0", linewidth=0.8, zorder=1)
+    ax.set_yticks(range(len(orden)))
+    ax.set_yticklabels([features[i] for i in orden])
+    ax.set_ylim(-0.6, len(orden) - 0.4)
+    ax.set_xlabel("Contribución SHAP por aviso (CLP/mes)")
+    ax.set_title(f"Impacto de cada variable, aviso por aviso\nSHAP · modelo {version} · test n={n_test}")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.012, fraction=0.035)
+    cbar.set_ticks([0, 1])
+    cbar.set_ticklabels(["valor bajo", "valor alto"])
+    cbar.ax.tick_params(labelsize=8)
+    cbar.set_label("Valor de la variable en ese aviso", fontsize=9)
+
+    fig.tight_layout()
+
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    DOCS_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(SAVE_DIR / "shap_beeswarm.png", dpi=150)
+    fig.savefig(DOCS_IMAGES_DIR / "shap_beeswarm.png", dpi=150)
+    plt.close(fig)
+
+
 def main() -> pd.DataFrame:
     modelo_info = pred.cargar_modelo_y_calibracion()
     features = modelo_info["features"]
@@ -183,7 +290,10 @@ def main() -> pd.DataFrame:
     print(f"\nTabla completa (29 features) guardada en {csv_path}")
 
     graficar(resumen, version, len(X_test))
-    print(f"Gráfico guardado en {DOCS_IMAGES_DIR / 'shap_importancia.png'} y en {SAVE_DIR / 'shap_importancia.png'}")
+    print(f"Gráfico de barras guardado en {DOCS_IMAGES_DIR / 'shap_importancia.png'}")
+
+    graficar_beeswarm(features, X_test, shap_matrix, version, len(X_test))
+    print(f"Beeswarm guardado en {DOCS_IMAGES_DIR / 'shap_beeswarm.png'}")
 
     return resumen
 

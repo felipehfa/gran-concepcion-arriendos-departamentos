@@ -13,11 +13,11 @@ from styles import COLOR_CARO, COLOR_OPORTUNIDAD, COLOR_TEXT_TITLE
 # app lo usen sin duplicar el archivo. Se embebe como data URI (en vez de una URL)
 # para no depender de cómo Streamlit Cloud sirve archivos estáticos fuera de este
 # directorio.
-_SHAP_IMG_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "images" / "shap_importancia.png"
+_SHAP_IMG_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "images"
 
 
-def _shap_img_data_uri() -> str:
-    data = _SHAP_IMG_PATH.read_bytes()
+def _img_data_uri(nombre_archivo: str) -> str:
+    data = (_SHAP_IMG_DIR / nombre_archivo).read_bytes()
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
 
 
@@ -201,7 +201,7 @@ Promediando esas contribuciones (en valor absoluto) sobre los 245 avisos de test
 tan determinante es cada variable **en general** — no para un aviso puntual:
 
 """
-        + f'<img src="{_shap_img_data_uri()}" alt="Importancia SHAP de las variables" style="width:100%;max-width:640px;display:block;margin:6px auto;" />'
+        + f'<img src="{_img_data_uri("shap_importancia.png")}" alt="Importancia SHAP de las variables" style="width:100%;max-width:640px;display:block;margin:6px auto;" />'
         + _render_shap_tabla()
         + """
 
@@ -210,6 +210,31 @@ amenities) concentran en conjunto **~75%** de la importancia total, ubicación y
 **~16%**, y el contexto socioeconómico del sector **~9%**. Superficie útil y número de baños,
 por sí solas, ya explican cerca de un tercio de cada predicción — son, con diferencia, lo que
 más mueve el costo total estimado.
+
+**Vista aviso por aviso**: el gráfico de arriba solo muestra el promedio. Este otro muestra la
+contribución real de cada uno de los 245 avisos de test, no el promedio:
+
+"""
+        + f'<img src="{_img_data_uri("shap_beeswarm.png")}" alt="Beeswarm de contribuciones SHAP por aviso" style="width:100%;max-width:720px;display:block;margin:6px auto;" />'
+        + """
+
+**Cómo leerlo**: cada punto es un aviso de test. Su posición horizontal es cuánto empujó esa
+variable el costo de *ese* aviso en particular (a la derecha de la línea del medio = subió el
+costo, a la izquierda = lo bajó). Su color es el valor de esa variable en ese aviso: azul si es
+bajo, rojo si es alto. La altura dentro de cada fila no significa nada — es solo para separar los
+puntos y que no queden todos amontonados unos sobre otros.
+
+Lo que se ve acá que el gráfico de barras no muestra:
+
+- En baños, ascensor, amoblado, piscina, bodegas y estacionamientos, los puntos azules y rojos
+  quedan casi completamente separados en dos grupos — el efecto de estas variables es parejo en
+  casi todos los avisos, no solo "en promedio".
+- En superficie útil y superficie total, la mayoría de los avisos están agrupados cerca del
+  centro, pero un grupo chico de departamentos muy grandes tiene un impacto mucho mayor que el
+  resto — el efecto del tamaño no es parejo: se dispara en los departamentos más grandes.
+- En las variables del sector (ranking de vulnerabilidad, porcentaje urbano) los colores están
+  más mezclados — el efecto existe pero es menos parejo entre avisos que el de las
+  características físicas del departamento.
 
 </div>
 

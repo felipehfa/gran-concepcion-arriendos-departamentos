@@ -402,7 +402,63 @@ el valor crudo de la feature y su propia contribución SHAP — una lectura simp
 features mayormente monótonas (superficie, conteos, dummies 0/1), pero no captura interacciones
 ni relaciones fuertemente no lineales.
 
+> **¿Por qué no la librería `shap`?** Se probó explícitamente: sobre este mismo ensamble y test
+> set, `shap.TreeExplainer` da valores **idénticos** (diferencia absoluta máxima = 0,0) a
+> `Booster.predict(..., pred_contrib=True)` — no hay ninguna diferencia numérica entre usar la
+> librería o el TreeSHAP nativo de LightGBM. El problema es de entorno, no de resultados: en esta
+> máquina Windows, `import shap` crashea (`STATUS_STACK_BUFFER_OVERRUN`, un error nativo, no una
+> excepción de Python) por una incompatibilidad de ABI entre el wheel de `shap==0.51.0` (la
+> última versión disponible) y `numpy==2.4.6` (la versión pinneada del proyecto); baja a
+> `numpy==2.2.6` y el crash desaparece, pero downgradear numpy en el entorno de entrenamiento no
+> vale la pena solo por esto. Además, la parte gráfica de `shap` (vía matplotlib) chocó por
+> separado con una política de Control de Aplicaciones de Windows del equipo, tanto instalando
+> con `pip` como con `conda-forge`. Por eso el beeswarm de abajo está reimplementado con
+> matplotlib puro sobre la misma matriz de contribuciones (`graficar_beeswarm` en
+> `analisis_shap.py`) — mismos números, sin la dependencia frágil.
+
 ![Importancia SHAP de las 15 variables más determinantes del costo total](docs/images/shap_importancia.png)
+
+**Vista aviso por aviso (beeswarm)**: el gráfico de barras de arriba solo muestra el promedio —
+este beeswarm muestra la contribución SHAP de **cada uno** de los 245 avisos de test, no solo el
+promedio de la feature:
+
+![Beeswarm de contribuciones SHAP por aviso, top 15 variables](docs/images/shap_beeswarm.png)
+
+**Cómo leerlo**: cada punto es un aviso de test. Las filas son las 15 features más importantes,
+en el mismo orden que el gráfico de barras (la más determinante arriba). La posición horizontal
+de un punto es la contribución SHAP de esa feature para ese aviso puntual, en CLP/mes — a la
+derecha de la línea vertical en 0 significa que esa feature empujó la predicción de *ese* aviso
+hacia un costo total más alto; a la izquierda, hacia uno más bajo. El **color** es el valor crudo
+de esa feature en ese aviso (azul = bajo, rojo = alto, normalizado por percentiles 5-95 para que
+un outlier no aplaste la escala). La posición vertical dentro de cada fila no tiene significado
+propio — es solo un jitter (más denso donde se acumulan más avisos) para que los puntos no se
+tapen entre sí, imitando el efecto "enjambre" de un beeswarm real.
+
+**Conclusiones que solo se ven acá (no en el promedio de la tabla)**:
+
+- **Las amenities binarias tienen un efecto limpio y consistente, no solo en promedio**: en
+  `banos`, `ascensor`, `amoblado`, `piscina`, `bodegas` y `estacionamientos` el color se separa en
+  dos nubes casi sin mezcla (azul a la izquierda, rojo a la derecha) — coincide con que son,
+  justamente, las features con `|correlación|` más alta de la tabla (0,94–0,99). El modelo no solo
+  "en promedio" sube el costo con estas variables: lo hace de forma prácticamente uniforme en
+  todos los avisos donde aparecen.
+- **El tamaño (`superficie_util_m2`, `superficie_total_m2`) tiene un efecto no lineal que el
+  promedio esconde**: la mayoría de los avisos se agrupa en una nube moderada cerca de cero, pero
+  un grupo chico de departamentos muy grandes (los puntos rojo oscuro más a la derecha) tiene
+  contribuciones desproporcionadamente altas, muy por encima del resto — el costo no sube
+  linealmente con el tamaño, se **acelera** en el extremo superior. Es la misma razón por la que
+  el error del modelo es más alto en el quintil más caro (sección 7): son pocos avisos, con un
+  efecto marginal grande y menos datos para acotarlo.
+- **Las variables de ubicación/socioeconómicas están más mezcladas** que las amenities físicas:
+  en `rank_nac` (la de menor `|correlación|` del top 10, 0,74) y `p_urbano` los colores se
+  entremezclan bastante más cerca de cero — el efecto en la dirección esperada existe en
+  promedio, pero es menos parejo aviso por aviso, señal de que el modelo lo combina con
+  interacciones de otras variables (`nivel_barrio`, `precio_m2_sector_departamento`) en vez de
+  aplicar un ajuste fijo por sí solo.
+- **`distancia_centro_concepcion_m` tiene dirección consistente pero magnitud acotada**: sus
+  puntos caen en una franja angosta alrededor de cero (a diferencia de la superficie, que se
+  extiende muy lejos) — aleja del centro baja el costo de forma confiable, pero nunca es, por sí
+  sola, un factor tan determinante como el tamaño o los baños para un aviso puntual.
 
 | # | Feature | Importancia SHAP (CLP/mes) | % del total | Dirección |
 |--:|---|---:|---:|---|
