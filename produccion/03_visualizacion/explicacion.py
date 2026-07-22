@@ -4,10 +4,18 @@ import streamlit as st
 
 from styles import COLOR_TEXT_TITLE
 
-# Las 32 features que usa el modelo vigente (ver 03_ingenieria_variables/save/seleccion_variables/
+# Las 29 features que usa el modelo vigente (ver 03_ingenieria_variables/save/seleccion_variables/
 # selected_features.csv y sección 4 del README), agrupadas igual que ahí, con una explicación en
 # lenguaje simple de qué mide cada una. Contenido estático (no se lee en vivo), igual que el resto
 # de las cifras de este archivo.
+#
+# 'gastos_comunes' YA NO es una feature de entrada: el modelo predice el costo
+# total mensual (arriendo + gastos comunes, ver costo_total_clp), así que
+# usar gastos_comunes como input sería fuga de datos (sería entrenar con
+# parte de la respuesta ya en la pregunta). Los gastos comunes del aviso se
+# siguen mostrando en la tarjeta y se siguen usando para calcular el costo
+# total real contra el que se compara la predicción — solo dejaron de
+# entrarle al modelo como variable predictora.
 _FEATURE_GROUPS = [
     (
         "Características físicas del departamento",
@@ -17,7 +25,6 @@ _FEATURE_GROUPS = [
             ("Relación superficie total/útil", "Qué tanta superficie \"extra\" (no habitable) tiene el departamento respecto a la habitable."),
             ("Número de baños", "Cantidad de baños del departamento."),
             ("Número de estacionamientos", "Cantidad de estacionamientos incluidos con el departamento."),
-            ("Estacionamientos de visita", "Si el edificio cuenta con estacionamientos para visitas."),
             ("Bodega", "Si el departamento incluye bodega."),
             ("Piso", "En qué piso del edificio está ubicado."),
             ("Ascensor", "Si el edificio tiene ascensor."),
@@ -29,24 +36,18 @@ _FEATURE_GROUPS = [
         ],
     ),
     (
-        "Costos asociados",
-        [
-            ("Gastos comunes", "Monto mensual de gastos comunes informado en el aviso."),
-        ],
-    ),
-    (
         "Ubicación y mercado local",
         [
-            ("Precio/m² de comparables cercanos", "Precio promedio por m² de otros departamentos similares dentro de 300 metros — nunca del propio aviso, para no sesgar la comparación."),
-            ("Confiabilidad de ese precio comparable", "Si hubo suficientes departamentos cercanos para calcular el precio/m² anterior de forma confiable."),
-            ("Nivel de precio del barrio", "Qué tan caro es el barrio en relación al resto de la ciudad, en 5 niveles."),
+            ("Costo total/m² de comparables cercanos", "Costo total mensual promedio por m² (arriendo + gastos comunes) de otros departamentos similares dentro de 300 metros — nunca del propio aviso, para no sesgar la comparación."),
+            ("Confiabilidad de ese costo comparable", "Si hubo suficientes departamentos cercanos para calcular el costo/m² anterior de forma confiable."),
+            ("Nivel de precio del barrio", "Qué tan caro es el barrio en relación al resto de la ciudad (según costo total mensual), en 5 niveles."),
             ("Distancia al centro de Concepción", "Distancia en línea recta al centro de la ciudad."),
             ("Distancia al centro de la comuna", "Distancia en línea recta al centro de la propia comuna del departamento."),
             ("Paraderos cercanos", "Cantidad de paraderos de locomoción colectiva a menos de 500 metros."),
             ("Colegios cercanos", "Cantidad de colegios a menos de 500 metros."),
             ("Supermercados cercanos", "Cantidad de supermercados a menos de 500 metros."),
             ("Jardines infantiles cercanos", "Cantidad de jardines infantiles a menos de 500 metros."),
-            ("Centros comerciales cercanos", "Cantidad de centros comerciales/malls a menos de 500 metros."),
+            ("Universidades cercanas", "Cantidad de universidades a menos de 500 metros."),
             ("Plazas cercanas", "Cantidad de plazas o áreas verdes a menos de 500 metros."),
             ("Farmacias cercanas", "Cantidad de farmacias a menos de 500 metros."),
             ("Clínicas u hospitales cercanos", "Cantidad de centros de salud a menos de 500 metros."),
@@ -56,8 +57,7 @@ _FEATURE_GROUPS = [
         "Contexto socioeconómico del sector",
         [
             ("Vulnerabilidad del sector (ranking nacional)", "Ranking nacional de vulnerabilidad social de la Unidad Vecinal, según el índice IGVUST del Registro Social de Hogares."),
-            ("Vulnerabilidad de la comuna", "El mismo índice de vulnerabilidad IGVUST, pero calculado a nivel de toda la comuna."),
-            ("Población en el Registro Social de Hogares", "Cantidad de personas registradas en el RSH dentro de la Unidad Vecinal del departamento."),
+            ("Hogares en el Registro Social de Hogares", "Cantidad de hogares registrados en el RSH dentro de la Unidad Vecinal del departamento."),
             ("Porcentaje urbano del sector", "Qué tan urbanizada (vs. rural) es la Unidad Vecinal donde está el departamento."),
         ],
     ),
@@ -91,9 +91,10 @@ Este buscador usa un **modelo predictivo** (no una tasación ni un servicio prof
 entrenado con avisos de arriendo de departamentos del Gran Concepción, recolectados por un
 scraper propio desde Portal Inmobiliario. El modelo aprende, a partir de las características
 de cada aviso (superficie, dormitorios, baños, comuna, cercanía a servicios, antigüedad,
-amenities, etc.), a estimar cuál **debería** ser el precio de arriendo — y luego compara ese
-precio estimado contra el precio real publicado para detectar si un aviso está por debajo,
-en línea, o por sobre lo esperado.
+amenities, etc.), a estimar cuál **debería** ser el costo total mensual (arriendo + gastos
+comunes) — y luego compara ese costo estimado contra el costo total real (arriendo publicado
+más gastos comunes informados) para detectar si un aviso está por debajo, en línea, o por
+sobre lo esperado.
 
 </div>
 
@@ -101,10 +102,10 @@ en línea, o por sobre lo esperado.
 
 ### Cantidad de datos usados
 
-El modelo vigente (`v0005_20260712085625_lightgbm_03cb22af`) se entrenó con **1.628 avisos**
+El modelo vigente (`v0006_20260721211302_lightgbm_5fbde493`) se entrenó con **1.627 avisos**
 de departamentos en arriendo, divididos en:
 
-- **1.383 avisos** para entrenar el modelo (ajuste + early stopping).
+- **1.382 avisos** para entrenar el modelo (ajuste + early stopping).
 - **245 avisos** que el modelo nunca vio durante el entrenamiento, usados solo para medir
   qué tan bien predice (conjunto de test).
 
@@ -115,11 +116,13 @@ catastro exhaustivo del mercado.
 
 <div class="app-card">
 
-### Qué variables usa el modelo para estimar el precio
+### Qué variables usa el modelo para estimar el costo total
 
-El modelo llega a un precio combinando **32 variables** de cada aviso, agrupadas en cuatro
-categorías. Ninguna variable por sí sola determina el precio — es la combinación de todas la
-que produce la estimación final.
+El modelo llega a un costo total mensual combinando **29 variables** de cada aviso, agrupadas
+en tres categorías. Ninguna variable por sí sola determina el costo — es la combinación de
+todas la que produce la estimación final. Los gastos comunes del propio aviso **no** son una
+de esas variables (ver nota más abajo): se usan solo al comparar el resultado, no como input
+del modelo.
 """
         + _render_grupos_features()
         + """
@@ -130,47 +133,48 @@ que produce la estimación final.
 
 ### Qué tan preciso es (el error del modelo)
 
-Medido sobre los 245 avisos de test (que el modelo no usó para entrenar):
+Medido sobre los 245 avisos de test (que el modelo no usó para entrenar), comparando el costo
+total predicho contra el costo total real (arriendo + gastos comunes):
 
 | Métrica | Valor | Qué significa |
 |---|---|---|
-| Error promedio (MAE) | **≈ \\$48.700** | En promedio, la predicción se equivoca por unos \\$48.700 respecto al precio real |
-| Error porcentual (MAPE) | **≈ 8,6%** | En promedio, la predicción se desvía ~8,6% del precio real |
-| R² | **≈ 0,84** | El modelo explica ~84% de la variación de precios entre avisos — queda ~16% sin explicar |
+| Error promedio (MAE) | **≈ \\$61.500** | En promedio, la predicción se equivoca por unos \\$61.500 respecto al costo total real |
+| Error porcentual (MAPE) | **≈ 10,0%** | En promedio, la predicción se desvía ~10,0% del costo total real |
+| R² | **≈ 0,80** | El modelo explica ~80% de la variación de costo total entre avisos — queda ~20% sin explicar |
 
 El error **no es parejo en todo el rango de precios**: en departamentos más caros (sobre
-~\\$670.000) el error típico sube a más de \\$85.000, porque hay menos avisos en ese rango para
-aprender de ellos y los precios son más variables. Por eso la calificación de "oportunidad"
-no compara contra un error único, sino contra el error típico de avisos de precio similar
-(ver estratos más abajo).
+~\\$740.000 de costo total) el error típico sube a más de \\$114.000, porque hay menos avisos en
+ese rango para aprender de ellos y los precios son más variables. Por eso la calificación de
+"oportunidad" no compara contra un error único, sino contra el error típico de avisos de costo
+similar (ver estratos más abajo).
 
 **¿Es esto bueno?** Como referencia, se compara contra dos formas "ingenuas" de estimar un
-precio sin ningún modelo:
+costo total sin ningún modelo:
 
-| Cómo se estima el precio | Error promedio (MAE) |
+| Cómo se estima el costo total | Error promedio (MAE) |
 |---|---|
-| Usar siempre el precio promedio del mercado, sin distinguir entre avisos | ≈ \\$125.900 |
-| Precio/m² del sector × superficie del departamento, sin ajustar nada más | ≈ \\$79.200 |
-| **Este modelo** | **≈ \\$48.700** |
+| Usar siempre el costo total promedio del mercado, sin distinguir entre avisos | ≈ \\$141.900 |
+| Costo total/m² del sector × superficie del departamento, sin ajustar nada más | ≈ \\$93.200 |
+| **Este modelo** | **≈ \\$61.500** |
 
-El modelo reduce el error a menos de la mitad frente a usar solo el precio/m² del sector, y a
-poco más de un tercio frente a asumir un precio promedio único para todo el mercado.
+El modelo reduce el error en un tercio frente a usar solo el costo total/m² del sector, y en
+más de la mitad frente a asumir un costo total promedio único para todo el mercado.
 
 </div>
 
 <div class="app-card">
 
-### Los estratos (deciles de precio)
+### Los estratos (deciles de costo total)
 
-Para calibrar cuándo un precio es "raro", los 245 avisos de test se agruparon en **10
-estratos según su precio** (deciles), y para cada estrato se calculó su propio error típico
-(mediana del error y MAD — desviación absoluta mediana, una versión del error típico menos
-sensible a valores extremos que la desviación estándar). Los bordes de precio de cada
-estrato en el modelo vigente son:
+Para calibrar cuándo un costo total es "raro", los 245 avisos de test se agruparon en **10
+estratos según su costo total mensual** (deciles), y para cada estrato se calculó su propio
+error típico (mediana del error y MAD — desviación absoluta mediana, una versión del error
+típico menos sensible a valores extremos que la desviación estándar). Los bordes de costo
+total de cada estrato en el modelo vigente son:
 
-`< $390.000` · `$390.000–430.000` · `$430.000–480.000` · `$480.000–500.000` ·
-`$500.000–530.000` · `$530.000–567.000` · `$567.000–600.000` · `$600.000–650.000` ·
-`$650.000–750.000` · `> $750.000`
+`< $417.000` · `$417.000–460.000` · `$460.000–495.200` · `$495.200–548.000` ·
+`$548.000–580.075` · `$580.075–630.000` · `$630.000–664.000` · `$664.000–730.000` ·
+`$730.000–796.060` · `> $796.060`
 
 Cada aviso se compara solo contra el error típico de su propio estrato, no contra un
 promedio general del mercado.
@@ -181,14 +185,15 @@ promedio general del mercado.
 
 ### Cuándo es "Oportunidad", "Precio de mercado" o "Caro"
 
-Para cada aviso se calcula un **z-score robusto**: qué tan lejos está su error (precio real
-− precio predicho) de la mediana de error de su estrato, medido en unidades de MAD de ese
-mismo estrato. Con eso:
+Para cada aviso se calcula un **z-score robusto**: qué tan lejos está su error (costo total
+real − costo total predicho) de la mediana de error de su estrato, medido en unidades de MAD
+de ese mismo estrato. Con eso:
 
-- **Oportunidad**: el precio real está bastante más bajo de lo esperado para avisos
+- **Oportunidad**: el costo total real está bastante más bajo de lo esperado para avisos
   similares (z-score robusto menor a −1).
-- **Caro**: el precio real está bastante más alto de lo esperado (z-score robusto mayor a 1).
-- **Precio de mercado**: el precio real está dentro de lo esperado para avisos similares.
+- **Caro**: el costo total real está bastante más alto de lo esperado (z-score robusto mayor
+  a 1).
+- **Precio de mercado**: el costo total real está dentro de lo esperado para avisos similares.
 
 La app solo muestra la etiqueta en palabras — a propósito no se expone el número del
 z-score ni el decil, para no dar una falsa sensación de precisión numérica.
@@ -203,9 +208,9 @@ El modelo no es un solo modelo: es un **ensamble de 10 modelos** entrenados con 
 semillas aleatorias sobre los mismos datos. El nivel de confianza mide **qué tan de acuerdo
 están esos 10 modelos entre sí** para un aviso en particular (su coeficiente de variación):
 
-- **Alta**: los 10 modelos predicen precios muy parecidos entre sí.
+- **Alta**: los 10 modelos predicen costos totales muy parecidos entre sí.
 - **Media**: hay algo de desacuerdo entre los 10 modelos.
-- **Baja**: los 10 modelos predicen precios bastante distintos entre sí — es una señal de
+- **Baja**: los 10 modelos predicen costos totales bastante distintos entre sí — es una señal de
   que ese aviso tiene una combinación de características poco común en los datos de
   entrenamiento, así que la predicción es menos confiable.
 
@@ -222,13 +227,13 @@ Este buscador se hizo **solo a modo de prueba y aprendizaje**, no es un servicio
 ni una recomendación de inversión. Antes de tomar cualquier decisión con esta información,
 ten en cuenta:
 
-- El modelo **no captura ni considera todas las variables** que afectan el precio real de un
-  arriendo: estado de conservación interno, luminosidad, ruido, calidad de terminaciones,
+- El modelo **no captura ni considera todas las variables** que afectan el costo total real de
+  un arriendo: estado de conservación interno, luminosidad, ruido, calidad de terminaciones,
   vista, estado del edificio/administración, condiciones del contrato, urgencia del
   arrendador, entre otras cosas que no están en los datos scrapeados.
-- Los datos vienen de avisos publicados — pueden tener errores de tipeo, precios
-  desactualizados, o información incompleta que el scraper no pudo capturar bien.
-- El error típico del modelo (~8,6%, más alto en tramos de precio poco frecuentes) significa
+- Los datos vienen de avisos publicados — pueden tener errores de tipeo, precios o gastos
+  comunes desactualizados, o información incompleta que el scraper no pudo capturar bien.
+- El error típico del modelo (~10,0%, más alto en tramos de costo poco frecuentes) significa
   que **puede fallar**, incluso en avisos marcados con confianza alta.
 - Revisa siempre la publicación original y otras variables no capturadas por el modelo antes
   de sacar conclusiones sobre un aviso puntual.

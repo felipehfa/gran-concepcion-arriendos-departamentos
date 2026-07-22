@@ -16,7 +16,7 @@ geometría ya guardada como WKT (en EPSG:4326).
 A diferencia de la base original (que guarda `vulnerabilidad_uv` y
 `avisos_igvust` como tablas de referencia separadas), acá el resultado del
 cruce se resuelve DIRECTO a columnas de `avisos_detalle`
-(uv_rsh, rank_nac, pob_rsh_uv, p_urbano, c_ig_com) — ver esquema en `db.py`.
+(uv_rsh, rank_nac, pob_rsh_uv, p_urbano, c_ig_com, hog_uv) — ver esquema en `db.py`.
 
 Incremental: solo procesa avisos con coordenadas y uv_rsh todavía NULL. Una
 vez resuelto, no se vuelve a tocar (el cruce no cambia salvo que el
@@ -67,7 +67,7 @@ def normalizar_nombre(texto: str) -> str:
 # ------------------------------------------------------------------
 def cargar_poligonos_gran_concepcion(con) -> list:
     filas = con.execute("""
-        SELECT uv_rsh, comuna, rank_nac, pob_rsh_uv, p_urbano, c_ig_com, geometria_wkt
+        SELECT uv_rsh, comuna, rank_nac, pob_rsh_uv, p_urbano, c_ig_com, hog_uv, geometria_wkt
         FROM poligonos_vulnerabilidad_uv
     """).fetchall()
 
@@ -81,7 +81,7 @@ def cargar_poligonos_gran_concepcion(con) -> list:
     poligonos = [
         {
             "uv_rsh": f[0], "comuna": f[1], "rank_nac": f[2], "pob_rsh_uv": f[3],
-            "p_urbano": f[4], "c_ig_com": f[5], "geometria": wkt.loads(f[6]),
+            "p_urbano": f[4], "c_ig_com": f[5], "hog_uv": f[6], "geometria": wkt.loads(f[7]),
         }
         for f in filas
     ]
@@ -123,11 +123,11 @@ def resolver_vulnerabilidad(con, poligonos: list, pendientes: pd.DataFrame) -> d
 
         con.execute("""
             UPDATE avisos_detalle
-            SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?, c_ig_com = ?
+            SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?, c_ig_com = ?, hog_uv = ?
             WHERE id_aviso = ?
         """, (
             encontrado["uv_rsh"], encontrado["rank_nac"], encontrado["pob_rsh_uv"],
-            encontrado["p_urbano"], encontrado["c_ig_com"], fila["id_aviso"],
+            encontrado["p_urbano"], encontrado["c_ig_com"], encontrado["hog_uv"], fila["id_aviso"],
         ))
 
     con.commit()

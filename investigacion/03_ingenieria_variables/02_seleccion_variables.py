@@ -43,7 +43,15 @@ OUTPUT_DIR  = SCRIPT_DIR / "save" / "seleccion_variables"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ID_COL     = "id_aviso"
-TARGET_COL = "precio_clp"
+TARGET_COL = "costo_total_clp"
+
+# Columnas que existen en el dataset pero no deben entrar como candidatas a
+# feature: 'gastos_comunes' porque es uno de los dos sumandos del target
+# (costo_total_clp = precio_clp + gastos_comunes) — usarla como feature sería
+# entrenar con parte de la respuesta ya en el input. 'precio_clp' por el
+# mismo motivo (es el otro sumando, y se conserva en el dataset solo como
+# columna informativa/de auditoría, no como target ni como feature).
+COLUMNAS_EXCLUIDAS_FEATURES = ["gastos_comunes", "precio_clp"]
 
 VAL_SIZE = 0.2   # hold-out aleatorio para el paso 3 (selección de k)
 
@@ -97,7 +105,8 @@ XGB_PARAMS = dict(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_and_split(input_path: Path, id_col: str, target_col: str,
-                    val_size: float, seed: int) -> tuple:
+                    val_size: float, seed: int,
+                    columnas_excluidas: list = COLUMNAS_EXCLUIDAS_FEATURES) -> tuple:
     """
     Carga el dataset, separa id/target de las features, y arma un split
     aleatorio train/val (no hay orden temporal que preservar).
@@ -108,6 +117,11 @@ def load_and_split(input_path: Path, id_col: str, target_col: str,
         df = df.drop(columns=[id_col])
 
     df = df.dropna(subset=[target_col])
+
+    excluidas_presentes = [c for c in columnas_excluidas if c in df.columns]
+    if excluidas_presentes:
+        print(f"  Excluidas de las candidatas a feature (fuga de datos hacia el target): {excluidas_presentes}")
+        df = df.drop(columns=excluidas_presentes)
 
     feature_cols = [c for c in df.columns if c != target_col]
 

@@ -1,13 +1,13 @@
 """
-Cálculo de precio predicho, confianza y etiqueta — pipeline de producción.
+Cálculo de costo total predicho, confianza y etiqueta — pipeline de producción.
 
 Toma las features calculadas por `04_ingenieria_variables_produccion.py`,
 predice con el ensamble de `modelo_produccion.pkl` (generado por
 `entrenamiento/01_entrenar_modelo_produccion.py`), y aplica la calibración de
 oportunidad/confianza guardada en `parametros_produccion.json` (bordes de
-deciles de precio + mediana/MAD de error por decil + terciles de CV) para
-etiquetar cada aviso, sin necesitar recalcular esos bordes con una sola fila
-nueva (imposible: qcut necesita una distribución).
+deciles de costo total + mediana/MAD de error por decil + terciles de CV)
+para etiquetar cada aviso, sin necesitar recalcular esos bordes con una sola
+fila nueva (imposible: qcut necesita una distribución).
 
 El modelo vigente puede ser XGBoost o LightGBM (lo decide
 `seleccionar_algoritmo.py`) — `cargar_modelo_y_calibracion`
@@ -17,10 +17,13 @@ script de investigación correspondiente, para usar SU `predict_ensemble_matrix`
 librería). El resto de esta etapa (z_robusto, calibración de
 oportunidad/confianza, conversión UF→CLP, UPSERT) es agnóstico al algoritmo.
 
-Convierte el precio real del aviso a CLP antes de compararlo contra la
-predicción — reutiliza `convertir_precios_uf_a_clp` de
-01_ingenieria_variables.py (consulta mindicador.cl con caché, ahora en la
-propia base de datos de producción en vez de la original).
+El modelo predice costo total mensual (arriendo + gastos comunes, ver
+costo_total_clp en 01_ingenieria_variables.py), así que la comparación real
+también tiene que ser costo total: convierte el arriendo real del aviso a CLP
+(reutiliza `convertir_precios_uf_a_clp` de 01_ingenieria_variables.py,
+consulta mindicador.cl con caché, ahora en la propia base de datos de
+producción en vez de la original) y le suma gastos_comunes antes de comparar
+contra la predicción.
 
 Inserta en `predicciones` vía UPSERT sobre (id_aviso, version_modelo): re-
 ejecutar esta etapa no duplica ni corrompe nada.
@@ -146,23 +149,23 @@ def calcular_precio_clp(con_produccion, id_avisos: list) -> pd.DataFrame:
 # ------------------------------------------------------------------
 # Persistencia
 # ------------------------------------------------------------------
-def guardar_prediccion(con, id_aviso: str, version_modelo: str, precio_predicho: float,
+def guardar_prediccion(con, id_aviso: str, version_modelo: str, costo_total_predicho: float,
                         z_robusto: float, decil_precio: int, etiqueta: str,
                         nivel_confianza: str, cv_ensamble: float) -> None:
     con.execute("""
         INSERT INTO predicciones (
-            id_aviso, version_modelo, fecha_prediccion, precio_predicho,
+            id_aviso, version_modelo, fecha_prediccion, costo_total_predicho,
             z_robusto, decil_precio, etiqueta, nivel_confianza, cv_ensamble
         ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id_aviso, version_modelo) DO UPDATE SET
-            fecha_prediccion = excluded.fecha_prediccion,
-            precio_predicho  = excluded.precio_predicho,
-            z_robusto        = excluded.z_robusto,
-            decil_precio     = excluded.decil_precio,
-            etiqueta         = excluded.etiqueta,
-            nivel_confianza  = excluded.nivel_confianza,
-            cv_ensamble      = excluded.cv_ensamble
-    """, (id_aviso, version_modelo, precio_predicho, z_robusto, decil_precio,
+            fecha_prediccion      = excluded.fecha_prediccion,
+            costo_total_predicho  = excluded.costo_total_predicho,
+            z_robusto             = excluded.z_robusto,
+            decil_precio          = excluded.decil_precio,
+            etiqueta              = excluded.etiqueta,
+            nivel_confianza       = excluded.nivel_confianza,
+            cv_ensamble           = excluded.cv_ensamble
+    """, (id_aviso, version_modelo, costo_total_predicho, z_robusto, decil_precio,
           etiqueta, nivel_confianza, cv_ensamble))
     con.commit()
 
@@ -193,6 +196,12 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
     # en NaN -> el loop de abajo ya sabe saltarlos como "sin precio_clp válido".
     precios = iv.filtrar_precio_maximo(precios)
     features_df = features_df.merge(precios, on="id_aviso", how="left")
+    # El modelo predice costo total (arriendo + gastos comunes, ver
+    # costo_total_clp en 01_ingenieria_variables.py), así que hay que comparar
+    # contra el costo total real, no solo contra el arriendo. 'gastos_comunes'
+    # viaja en features_df como columna pass-through (no es feature del
+    # modelo, ver 04_ingenieria_variables_produccion.py).
+    features_df["costo_total_real"] = features_df["precio_clp"] + features_df["gastos_comunes"]
 
     X = features_df.reindex(columns=modelo_info["features"], fill_value=0).fillna(0)
     pred_matrix = modelo_info["predict_ensemble_matrix"](modelo_info["models"], X)
@@ -213,16 +222,16 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
     saltados = 0
 
     for i, fila in features_df.reset_index(drop=True).iterrows():
-        precio_real = fila["precio_clp"]
-        if pd.isna(precio_real):
+        costo_total_real = fila["costo_total_real"]
+        if pd.isna(costo_total_real):
             log.warning(f"{fila['id_aviso']}: sin precio_clp válido. Se salta esta corrida.")
             saltados += 1
             continue
 
-        precio_predicho = float(y_pred[i])
-        error = precio_real - precio_predicho
+        costo_total_predicho = float(y_pred[i])
+        error = costo_total_real - costo_total_predicho
 
-        decil = int(pd.cut([precio_real], bins=bordes_deciles, labels=False, include_lowest=True)[0])
+        decil = int(pd.cut([costo_total_real], bins=bordes_deciles, labels=False, include_lowest=True)[0])
         stats_decil = stats_por_decil.get(str(decil))
         mediana_decil = stats_decil["mediana_error"]
         mad_decil = stats_decil["mad_error"]
@@ -241,9 +250,9 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
 
         guardar_prediccion(
             con_produccion, fila["id_aviso"], modelo_info["version_modelo"],
-            precio_predicho, float(z_robusto), decil, etiqueta, nivel_confianza, float(cv_ensamble[i]),
+            costo_total_predicho, float(z_robusto), decil, etiqueta, nivel_confianza, float(cv_ensamble[i]),
         )
-        log.info(f"{fila['id_aviso']}: precio_predicho={precio_predicho:,.0f}  "
+        log.info(f"{fila['id_aviso']}: costo_total_predicho={costo_total_predicho:,.0f}  "
                   f"etiqueta={etiqueta}  confianza={nivel_confianza}")
         generadas += 1
 
