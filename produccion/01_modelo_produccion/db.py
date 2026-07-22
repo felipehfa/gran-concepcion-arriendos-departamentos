@@ -72,7 +72,9 @@ def conectar_produccion(ruta_bd: Path = RUTA_BD_PRODUCCION) -> sqlite3.Connectio
     con.execute("PRAGMA foreign_keys = ON")
     _migrar_esquema_avisos(con)
     inicializar_bd_produccion(con)
+    _migrar_esquema_poligonos_vulnerabilidad(con)
     _migrar_esquema_avisos_detalle(con)
+    _migrar_esquema_predicciones(con)
     return con
 
 
@@ -188,6 +190,59 @@ def _migrar_esquema_avisos_detalle(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE avisos_detalle ADD COLUMN fecha_publicacion_precision TEXT")
         con.commit()
 
+    if "hog_uv" not in columnas:
+        # Solo agrega la columna (queda NULL en filas existentes) - a
+        # diferencia de c_ig_com, acá el backfill de avisos YA resueltos
+        # (uv_rsh IS NOT NULL) no lo hace 03_vulnerabilidad_produccion.py en
+        # su próxima corrida (esa etapa solo mira uv_rsh IS NULL), así que
+        # requiere un backfill puntual aparte (ver backfill_hog_uv.py) que
+        # además necesita que poligonos_vulnerabilidad_uv.hog_uv ya esté
+        # poblada (ver _migrar_esquema_poligonos_vulnerabilidad).
+        con.execute("ALTER TABLE avisos_detalle ADD COLUMN hog_uv REAL")
+        con.commit()
+
+
+def _migrar_esquema_poligonos_vulnerabilidad(con: sqlite3.Connection) -> None:
+    """
+    Se llama DESPUÉS de inicializar_bd_produccion(). Si la tabla ya existía
+    de antes sin la columna `hog_uv`, la agrega con ALTER TABLE ... ADD
+    COLUMN (queda NULL en las filas existentes). El backfill de datos (desde
+    la tabla `vulnerabilidad_uv` de la base ORIGINAL de investigación, por
+    `uv_rsh`) es un paso puntual aparte (ver backfill_hog_uv.py) - no
+    requiere el shapefile IGVUST, a diferencia de la carga inicial de esta
+    tabla vía migrar_poligonos_vulnerabilidad.py.
+    """
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(poligonos_vulnerabilidad_uv)").fetchall()}
+    if not columnas:
+        return
+
+    if "hog_uv" not in columnas:
+        con.execute("ALTER TABLE poligonos_vulnerabilidad_uv ADD COLUMN hog_uv REAL")
+        con.commit()
+
+
+def _migrar_esquema_predicciones(con: sqlite3.Connection) -> None:
+    """
+    Se llama DESPUÉS de inicializar_bd_produccion() (que ya garantiza que la
+    tabla exista con el esquema actual vía CREATE TABLE IF NOT EXISTS). Si la
+    tabla ya existía de antes con la columna vieja `precio_predicho` (el
+    modelo predecía solo el arriendo nominal), la renombra a
+    `costo_total_predicho` (el modelo ahora predice arriendo + gastos
+    comunes) con ALTER TABLE ... RENAME COLUMN - soportado desde SQLite
+    3.25, conserva los valores existentes tal cual. Esas filas antiguas
+    quedan con un valor bajo el significado VIEJO (solo arriendo) aunque la
+    columna ya se llame costo_total_predicho; conviene forzar una
+    repredicción del histórico tras desplegar el modelo nuevo en vez de
+    confiar en estos valores.
+    """
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(predicciones)").fetchall()}
+    if not columnas:
+        return
+
+    if "precio_predicho" in columnas and "costo_total_predicho" not in columnas:
+        con.execute("ALTER TABLE predicciones RENAME COLUMN precio_predicho TO costo_total_predicho")
+        con.commit()
+
 
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
     """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
@@ -266,6 +321,7 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             pob_rsh_uv                     INTEGER,
             p_urbano                       REAL,
             c_ig_com                       REAL,
+            hog_uv                         REAL,
             fecha_scrapeo                  TEXT
         )
     """)
@@ -278,22 +334,23 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             pob_rsh_uv     INTEGER,
             p_urbano       REAL,
             c_ig_com       REAL,
+            hog_uv         REAL,
             geometria_wkt  TEXT NOT NULL
         )
     """)
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS predicciones (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_aviso          TEXT NOT NULL REFERENCES avisos(id_aviso),
-            version_modelo    TEXT NOT NULL,
-            fecha_prediccion  TEXT NOT NULL,
-            precio_predicho   REAL NOT NULL,
-            z_robusto         REAL,
-            decil_precio      INTEGER,
-            etiqueta          TEXT CHECK(etiqueta IN ('oportunidad', 'caro', 'precio_de_mercado')),
-            nivel_confianza   TEXT CHECK(nivel_confianza IN ('alta confianza', 'confianza media', 'baja confianza')),
-            cv_ensamble       REAL,
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_aviso               TEXT NOT NULL REFERENCES avisos(id_aviso),
+            version_modelo         TEXT NOT NULL,
+            fecha_prediccion       TEXT NOT NULL,
+            costo_total_predicho   REAL NOT NULL,
+            z_robusto              REAL,
+            decil_precio           INTEGER,
+            etiqueta               TEXT CHECK(etiqueta IN ('oportunidad', 'caro', 'precio_de_mercado')),
+            nivel_confianza        TEXT CHECK(nivel_confianza IN ('alta confianza', 'confianza media', 'baja confianza')),
+            cv_ensamble            REAL,
             UNIQUE(id_aviso, version_modelo)
         )
     """)

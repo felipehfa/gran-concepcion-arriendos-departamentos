@@ -60,7 +60,7 @@ MAPA_BARRIO_A_NIVEL = _NIVELES_BARRIO["mapa_barrio_a_nivel"]
 NIVEL_BARRIO_DEFAULT = _NIVELES_BARRIO["nivel_default"]
 
 ID_COL = "id_aviso"
-COLUMNAS_VULNERABILIDAD = ["rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com"]
+COLUMNAS_VULNERABILIDAD = ["rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com", "hog_uv"]
 
 MAX_DORMITORIOS = 6
 MAX_BANOS = 5
@@ -79,7 +79,7 @@ def obtener_avisos_pendientes(con) -> pd.DataFrame:
             d.piscina, d.ascensor, d.cantidad_paraderos, d.cantidad_colegios,
             d.distancia_centro_comuna_m, d.distancia_centro_concepcion_m,
             d.piso_unidad, d.superficie_util_m2, d.superficie_total_m2,
-            d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano, d.c_ig_com,
+            d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano, d.c_ig_com, d.hog_uv,
             d.latitud, d.longitud,
             d.barrio, d.bodegas, d.conserjeria, d.estacionamiento_visitas,
             d.condominio_cerrado, d.cantidad_jardines_infantiles,
@@ -147,7 +147,11 @@ def construir_poblacion_referencia(con_original) -> pd.DataFrame:
     referencia["latitud"] = pd.to_numeric(referencia["latitud"], errors="coerce")
     referencia["longitud"] = pd.to_numeric(referencia["longitud"], errors="coerce")
     referencia = referencia.dropna(subset=["latitud", "longitud"]).reset_index(drop=True)
-    referencia["precio_m2"] = referencia["precio_clp"] / referencia["superficie_util_m2"].replace(0, np.nan)
+    # Basado en costo_total_clp (arriendo + gastos comunes), no en precio_clp,
+    # para que coincida con cómo se calculó precio_m2_sector_departamento en
+    # investigación (ver agregar_precio_m2_sector en 01_ingenieria_variables.py)
+    # — de lo contrario habría distinto criterio train/serving para esta feature.
+    referencia["precio_m2"] = referencia["costo_total_clp"] / referencia["superficie_util_m2"].replace(0, np.nan)
 
     log.info(f"Población de referencia: {len(referencia)} departamentos históricos con coordenadas.")
     return referencia
@@ -305,7 +309,13 @@ def normalizar_columnas_nuevas(df: pd.DataFrame) -> pd.DataFrame:
 # dinámicamente desde selected_features.csv)
 # ------------------------------------------------------------------
 def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
-    columnas_salida = [ID_COL] + FEATURES_ESPERADAS
+    # 'gastos_comunes' viaja además de FEATURES_ESPERADAS aunque ya no sea
+    # feature del modelo (es uno de los sumandos del target, costo_total_clp
+    # = precio_clp + gastos_comunes — usarla como feature sería fuga de
+    # datos): 05_prediccion.py la necesita como columna pass-through para
+    # calcular el costo total real del aviso y compararlo contra la
+    # predicción.
+    columnas_salida = [ID_COL] + FEATURES_ESPERADAS + ["gastos_comunes"]
 
     pendientes = obtener_avisos_pendientes(con_produccion)
     log.info(f"{len(pendientes)} avisos departamento pendientes de calcular features.")
@@ -337,6 +347,9 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
             "id_aviso": fila["id_aviso"],
             "amoblado": int(bool(iv.PATRON_AMOBLADO.search(titulo))),
             "estacionamientos": fila["estacionamientos"] if pd.notna(fila["estacionamientos"]) else 0,
+            # No es feature del modelo (ver comentario sobre columnas_salida
+            # más arriba) — viaja igual para que 05_prediccion.py pueda armar
+            # el costo total real del aviso.
             "gastos_comunes": fila["gastos_comunes"] if pd.notna(fila["gastos_comunes"]) else 0,
             "banos": fila["banos"],
             "antiguedad_anos": referencia.antiguedad(fila["latitud"], fila["longitud"], fila["comuna"], fila["antiguedad_anos"]),
@@ -349,6 +362,7 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
             "superficie_total_m2": fila["superficie_total_m2"],
             "ratio_total_util": fila["ratio_total_util"],
             "pob_rsh_uv": referencia.vulnerabilidad(fila["comuna"], "pob_rsh_uv", fila["pob_rsh_uv"]),
+            "hog_uv": referencia.vulnerabilidad(fila["comuna"], "hog_uv", fila["hog_uv"]),
             "cantidad_paraderos": fila["cantidad_paraderos"] if pd.notna(fila["cantidad_paraderos"]) else 0,
             "distancia_centro_comuna_m": fila["distancia_centro_comuna_m"],
             "cantidad_colegios": fila["cantidad_colegios"] if pd.notna(fila["cantidad_colegios"]) else 0,

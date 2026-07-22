@@ -1,0 +1,308 @@
+{
+    "version_modelo": "v0006_20260721211302_lightgbm_5fbde493",
+    "algoritmo": "lightgbm",
+    "fecha_entrenamiento": "2026-07-21 21:13:02",
+    "features": [
+        "amoblado",
+        "estacionamientos",
+        "precio_m2_sector_departamento",
+        "ascensor",
+        "rank_nac",
+        "piso_unidad",
+        "banos",
+        "antiguedad_anos",
+        "distancia_centro_concepcion_m",
+        "bodegas",
+        "piscina",
+        "distancia_centro_comuna_m",
+        "superficie_util_m2",
+        "superficie_total_m2",
+        "conserjeria",
+        "p_urbano",
+        "ratio_total_util",
+        "cantidad_jardines_infantiles",
+        "hog_uv",
+        "condominio_cerrado",
+        "cantidad_colegios",
+        "cantidad_supermercados",
+        "cantidad_plazas",
+        "tiene_comparables_cercanos",
+        "nivel_barrio",
+        "cantidad_clinicas",
+        "cantidad_paraderos",
+        "cantidad_universidades",
+        "cantidad_farmacias"
+    ],
+    "target_col": "costo_total_clp",
+    "hiperparametros": {
+        "learning_rate": 0.04300585510585398,
+        "max_depth": 6,
+        "num_leaves": 58,
+        "min_child_samples": 4,
+        "subsample": 0.5476708305424451,
+        "colsample_bytree": 0.5139308403556033,
+        "reg_alpha": 0.4754349787319934,
+        "reg_lambda": 11.429035155172691,
+        "min_split_gain": 3.7383345333045215,
+        "objective": "regression",
+        "metric": "rmse",
+        "bagging_freq": 1
+    },
+    "optimizacion": {
+        "best_cv_score": 66835.858595,
+        "cv_metric": "mae",
+        "best_trial": 43,
+        "best_params": {
+            "learning_rate": 0.04300585510585398,
+            "max_depth": 6,
+            "num_leaves": 58,
+            "min_child_samples": 4,
+            "subsample": 0.5476708305424451,
+            "colsample_bytree": 0.5139308403556033,
+            "reg_alpha": 0.4754349787319934,
+            "reg_lambda": 11.429035155172691,
+            "min_split_gain": 3.7383345333045215,
+            "objective": "regression",
+            "metric": "rmse",
+            "bagging_freq": 1
+        },
+        "objective_fijo": "regression",
+        "n_trials": 50,
+        "cv_splits": 5,
+        "cv_solo_train": true
+    },
+    "n_seeds_bagging": 10,
+    "tiempo_bagging_seg": 1.97,
+    "split": {
+        "test_size": 0.15,
+        "early_stop_fraction_of_train": 0.1,
+        "seed": 42,
+        "n_train_fit": 1243,
+        "n_train_earlystop": 139,
+        "n_test": 245
+    },
+    "evaluacion_subset_early_stopping": {
+        "metricas_globales": {
+            "mae": 72215.2242,
+            "rmse": 116518.9759,
+            "r2": 0.759,
+            "mape": 11.1618,
+            "mdape": 7.6172
+        },
+        "baselines": {
+            "media_train": {
+                "mae": 161455.3017
+            },
+            "mercado_m2_sector": {
+                "mae": 92764.0917
+            }
+        },
+        "residuos": {
+            "media": 4242.3098,
+            "std": 116441.7217,
+            "skewness": 1.7973,
+            "kurtosis": 8.0466
+        },
+        "mae_por_quintil_precio": {
+            "0": {
+                "rango": "[330,035 - 450,000]",
+                "mae": 75562.7581,
+                "mape": 18.7524,
+                "mdape": 14.4992
+            },
+            "1": {
+                "rango": "[450,050 - 540,000]",
+                "mae": 43436.7244,
+                "mape": 8.7343,
+                "mdape": 5.3023
+            },
+            "2": {
+                "rango": "[550,000 - 610,000]",
+                "mae": 50018.1858,
+                "mape": 8.668,
+                "mdape": 7.8474
+            },
+            "3": {
+                "rango": "[615,000 - 720,080]",
+                "mae": 38771.1113,
+                "mape": 5.7825,
+                "mdape": 4.1445
+            },
+            "4": {
+                "rango": "[730,000 - 1,481,751]",
+                "mae": 152092.9086,
+                "mape": 13.6793,
+                "mdape": 11.1277
+            }
+        }
+    },
+    "evaluacion_test": {
+        "metricas_globales": {
+            "mae": 61469.9301,
+            "rmse": 90381.9536,
+            "r2": 0.7974,
+            "mape": 10.0475,
+            "mdape": 7.1937
+        },
+        "baselines": {
+            "media_train": {
+                "mae": 141926.4433
+            },
+            "mercado_m2_sector": {
+                "mae": 93160.6574
+            }
+        },
+        "residuos": {
+            "media": -7713.9003,
+            "std": 90052.1697,
+            "skewness": 0.3623,
+            "kurtosis": 5.4275
+        },
+        "mae_por_quintil_precio": {
+            "0": {
+                "rango": "[250,000 - 460,000]",
+                "mae": 55083.8458,
+                "mape": 13.9597,
+                "mdape": 10.7847
+            },
+            "1": {
+                "rango": "[460,045 - 545,000]",
+                "mae": 42939.934,
+                "mape": 8.6904,
+                "mdape": 5.4783
+            },
+            "2": {
+                "rango": "[550,000 - 630,000]",
+                "mae": 48093.4296,
+                "mape": 8.2303,
+                "mdape": 6.7749
+            },
+            "3": {
+                "rango": "[630,100 - 730,000]",
+                "mae": 48997.3734,
+                "mape": 7.3173,
+                "mdape": 5.9419
+            },
+            "4": {
+                "rango": "[740,000 - 1,670,000]",
+                "mae": 114706.1179,
+                "mape": 12.0897,
+                "mdape": 9.23
+            }
+        }
+    },
+    "shap_importance": {
+        "superficie_util_m2": 42425.386409,
+        "banos": 40962.615432,
+        "superficie_total_m2": 34022.720088,
+        "estacionamientos": 16129.906153,
+        "precio_m2_sector_departamento": 12884.841852,
+        "amoblado": 9092.791504,
+        "distancia_centro_concepcion_m": 8656.593398,
+        "rank_nac": 8218.977758,
+        "p_urbano": 7243.726039,
+        "ascensor": 6724.363743,
+        "hog_uv": 5690.93544,
+        "piso_unidad": 5453.796182,
+        "antiguedad_anos": 5438.374126,
+        "piscina": 4816.150743,
+        "bodegas": 4674.825428,
+        "conserjeria": 3726.713144,
+        "distancia_centro_comuna_m": 3568.881699,
+        "nivel_barrio": 2623.752643,
+        "cantidad_farmacias": 2500.517498,
+        "cantidad_jardines_infantiles": 2110.941993,
+        "condominio_cerrado": 2075.672953,
+        "cantidad_colegios": 1668.446721,
+        "cantidad_supermercados": 1630.749867,
+        "ratio_total_util": 1477.04301,
+        "cantidad_paraderos": 1071.437905,
+        "cantidad_plazas": 1020.925776,
+        "cantidad_clinicas": 848.72283,
+        "cantidad_universidades": 640.908365,
+        "tiene_comparables_cercanos": 328.938344
+    },
+    "calibracion_oportunidad": {
+        "bordes_deciles_precio": [
+            -Infinity,
+            417000.0,
+            460000.0,
+            495200.00000000006,
+            548000.0,
+            580075.0,
+            630000.0,
+            664000.0000000002,
+            730000.0,
+            796060.0,
+            Infinity
+        ],
+        "stats_por_decil": {
+            "0": {
+                "n": 25,
+                "mediana_error": -56387.6808731177,
+                "mad_error": 22753.44771018374
+            },
+            "1": {
+                "n": 25,
+                "mediana_error": -12754.429231074464,
+                "mad_error": 18763.4755554999
+            },
+            "2": {
+                "n": 24,
+                "mediana_error": -18847.737075848505,
+                "mad_error": 36379.092283851525
+            },
+            "3": {
+                "n": 24,
+                "mediana_error": -26188.94079229096,
+                "mad_error": 27653.01318741092
+            },
+            "4": {
+                "n": 25,
+                "mediana_error": -28809.222009770223,
+                "mad_error": 22945.43601887708
+            },
+            "5": {
+                "n": 26,
+                "mediana_error": 14152.40898724366,
+                "mad_error": 40649.84214181127
+            },
+            "6": {
+                "n": 22,
+                "mediana_error": 207.14737538504414,
+                "mad_error": 38869.43666608556
+            },
+            "7": {
+                "n": 27,
+                "mediana_error": 22104.074190058396,
+                "mad_error": 33541.44665611524
+            },
+            "8": {
+                "n": 22,
+                "mediana_error": 63077.97658871906,
+                "mad_error": 40086.62108741881
+            },
+            "9": {
+                "n": 25,
+                "mediana_error": 58203.220527346944,
+                "mad_error": 73008.16006596095
+            }
+        },
+        "bordes_cv_confianza": [
+            -Infinity,
+            0.013755864757178063,
+            0.018806733085503503,
+            Infinity
+        ],
+        "etiquetas_confianza": [
+            "alta confianza",
+            "confianza media",
+            "baja confianza"
+        ],
+        "mad_scale_const": 1.4826,
+        "umbral_oportunidad": 1.0,
+        "umbral_caro": 1.0
+    },
+    "dataset_origen": "G:\\Mi unidad\\Proyectos personales\\gran-concepcion-rentals\\investigacion\\03_ingenieria_variables\\save\\ingeniaria_variables\\datos_ingenieria_variables.csv",
+    "features_origen": "G:\\Mi unidad\\Proyectos personales\\gran-concepcion-rentals\\investigacion\\03_ingenieria_variables\\save\\seleccion_variables\\selected_features.csv"
+}

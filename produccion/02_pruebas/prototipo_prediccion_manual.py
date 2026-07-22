@@ -2,16 +2,22 @@
 PROTOTIPO DE PRUEBA — NO ES PARTE DEL PIPELINE PRODUCTIVO.
 
 Permite ingresar a mano lat/lon + características de un departamento y
-obtener (a) el precio estimado por el ensamble de producción vigente y
-(b) la banda de precio que el sistema consideraría "precio de mercado" (ni
-oportunidad ni caro), reutilizando el modelo y la calibración ya entrenados
-en `produccion/01_modelo_produccion/` (sin duplicar esa lógica, vía importlib).
+obtener (a) el costo total mensual estimado (arriendo + gastos comunes) por
+el ensamble de producción vigente y (b) la banda de costo total que el
+sistema consideraría "precio de mercado" (ni oportunidad ni caro),
+reutilizando el modelo y la calibración ya entrenados en
+`produccion/01_modelo_produccion/` (sin duplicar esa lógica, vía importlib).
 
-No toca ningún archivo fuera de `05.1_pruebas/`. Vive aislado a propósito:
+El modelo predice costo total, no arriendo nominal (ver costo_total_clp en
+01_ingenieria_variables.py) — GASTOS_COMUNES es un input del usuario (no una
+feature del modelo, ver construir_fila_features) que se usa solo para
+despejar el arriendo implícito a partir del costo total predicho.
+
+No toca ningún archivo fuera de `02_pruebas/`. Vive aislado a propósito:
 es solo para validar la idea antes de integrarla a la app de Streamlit.
 
 CÓMO CORRERLO:
-    python 05.1_pruebas/prototipo_prediccion_manual.py
+    python 02_pruebas/prototipo_prediccion_manual.py
 Edita el bloque de constantes más abajo para probar una propiedad distinta.
 """
 
@@ -79,7 +85,10 @@ PISO_UNIDAD = 2                # int (1 = primer piso; >30 se trata como dato
 ANTIGUEDAD_ANOS = 3         # int, o None para estimarla por comparables
                                 # cercanos/comuna (igual que producción cuando
                                 # el aviso no trae antigüedad)
-GASTOS_COMUNES = 95000         # float, CLP/mes (0 si no tiene)
+GASTOS_COMUNES = 95000         # float, CLP/mes (0 si no tiene). NO es una
+                                # feature del modelo (ver construir_fila_features)
+                                # - se usa solo para despejar el arriendo
+                                # implícito a partir del costo total predicho.
 
 # --- Atributos sí/no (0 = no, 1 = sí) ---
 AMOBLADO = 0
@@ -87,7 +96,6 @@ PISCINA = 0
 ASCENSOR = 1
 CONSERJERIA = 1
 CONDOMINIO_CERRADO = 0
-ESTACIONAMIENTO_VISITAS = 0
 
 # --- Bodegas (cantidad, no booleano) ---
 BODEGAS = 0                    # int, cantidad de bodegas (0 si no tiene)
@@ -103,7 +111,7 @@ CANTIDAD_COLEGIOS = 2               # int, >= 0
 CANTIDAD_SUPERMERCADOS = 0          # int, >= 0
 CANTIDAD_JARDINES_INFANTILES = 0    # int, >= 0
 CANTIDAD_PARADEROS = 5              # int, >= 0
-CANTIDAD_CENTROS_COMERCIALES = 0    # int, >= 0
+CANTIDAD_UNIVERSIDADES = 0          # int, >= 0
 CANTIDAD_PLAZAS = 2                 # int, >= 0
 CANTIDAD_FARMACIAS = 0              # int, >= 0
 CANTIDAD_CLINICAS = 0               # int, >= 0
@@ -140,18 +148,21 @@ def haversine_metros(lat1, lon1, lat2, lon2) -> float:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Vulnerabilidad socioterritorial (rank_nac/pob_rsh_uv/p_urbano/c_ig_com):
-# cruce punto-en-polígono real (IGVUST) reutilizando la tabla ya precalculada
-# `poligonos_vulnerabilidad_uv`, igual que 03_vulnerabilidad_produccion.py.
-# Si el punto no cae en ningún polígono, cae al mismo fallback por comuna/
-# global que ya usa `Referencia.vulnerabilidad`.
+# Vulnerabilidad socioterritorial (rank_nac/pob_rsh_uv/p_urbano/c_ig_com/
+# hog_uv): cruce punto-en-polígono real (IGVUST) reutilizando la tabla ya
+# precalculada `poligonos_vulnerabilidad_uv`, igual que
+# 03_vulnerabilidad_produccion.py. Si el punto no cae en ningún polígono,
+# cae al mismo fallback por comuna/global que ya usa `Referencia.vulnerabilidad`.
+# Se resuelven las 5 columnas aunque no todas sean features del modelo
+# actual (ver construir_fila_features), para no tener que sincronizar esta
+# lista cada vez que cambie la selección de variables.
 # ══════════════════════════════════════════════════════════════════════════
 def resolver_vulnerabilidad_puntual(con_produccion, referencia, lat: float, lon: float, comuna: str) -> dict:
     poligonos = vuln.cargar_poligonos_gran_concepcion(con_produccion)
     punto = Point(lon, lat)
     encontrado = next((p for p in poligonos if p["geometria"].contains(punto)), None)
 
-    columnas = ["rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com"]
+    columnas = ["rank_nac", "pob_rsh_uv", "p_urbano", "c_ig_com", "hog_uv"]
     if encontrado is not None:
         return {c: float(encontrado[c]) for c in columnas}
     return {c: referencia.vulnerabilidad(comuna, c, np.nan) for c in columnas}
@@ -188,7 +199,6 @@ def construir_fila_features(con_produccion, con_original, features_esperadas: li
         "piso_unidad": piso_unidad,
         "precio_m2_sector_departamento": precio_m2_sector,
         "banos": BANOS,
-        "gastos_comunes": GASTOS_COMUNES,
         "rank_nac": vulnerabilidad["rank_nac"],
         "antiguedad_anos": antiguedad,
         "distancia_centro_concepcion_m": distancia_centro_concepcion_m,
@@ -200,7 +210,7 @@ def construir_fila_features(con_produccion, con_original, features_esperadas: li
         "ascensor": ASCENSOR,
         "ratio_total_util": SUPERFICIE_TOTAL_M2 / SUPERFICIE_UTIL_M2,
         "p_urbano": vulnerabilidad["p_urbano"],
-        "pob_rsh_uv": vulnerabilidad["pob_rsh_uv"],
+        "hog_uv": vulnerabilidad["hog_uv"],
         "nivel_barrio": nivel_barrio,
         "cantidad_colegios": CANTIDAD_COLEGIOS,
         "condominio_cerrado": CONDOMINIO_CERRADO,
@@ -208,42 +218,41 @@ def construir_fila_features(con_produccion, con_original, features_esperadas: li
         "tiene_comparables_cercanos": int(tiene_comparables),
         "cantidad_jardines_infantiles": CANTIDAD_JARDINES_INFANTILES,
         "cantidad_paraderos": CANTIDAD_PARADEROS,
-        "estacionamiento_visitas": ESTACIONAMIENTO_VISITAS,
         "conserjeria": CONSERJERIA,
-        "cantidad_centros_comerciales": CANTIDAD_CENTROS_COMERCIALES,
+        "cantidad_universidades": CANTIDAD_UNIVERSIDADES,
         "cantidad_plazas": CANTIDAD_PLAZAS,
         "cantidad_farmacias": CANTIDAD_FARMACIAS,
         "cantidad_clinicas": CANTIDAD_CLINICAS,
-        "c_ig_com": vulnerabilidad["c_ig_com"],
     }
 
     return pd.DataFrame([fila])[features_esperadas]
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Banda de precio "de mercado": como no hay un precio real que comparar (a
-# diferencia de un aviso ya publicado), se ubica el decil de calibración con
-# el propio precio_predicho en vez del precio_real - es la única ancla
-# disponible, y el error mediano por decil es chico frente al ancho de cada
-# banda de precio, así que casi siempre cae en el mismo decil que caería el
-# precio real. Fórmula derivada despejando precio_real de z_robusto en el
-# punto donde cruza cada umbral (mismo signo que 05_prediccion.py: z_robusto
-# > umbral_caro -> "caro", z_robusto < -umbral_oportunidad -> "oportunidad").
+# Banda de costo total "de mercado": como no hay un costo total real que
+# comparar (a diferencia de un aviso ya publicado), se ubica el decil de
+# calibración con el propio costo_total_predicho en vez del costo_total_real
+# - es la única ancla disponible, y el error mediano por decil es chico
+# frente al ancho de cada banda de costo, así que casi siempre cae en el
+# mismo decil que caería el costo total real. Fórmula derivada despejando
+# costo_total_real de z_robusto en el punto donde cruza cada umbral (mismo
+# signo que 05_prediccion.py: z_robusto > umbral_caro -> "caro",
+# z_robusto < -umbral_oportunidad -> "oportunidad").
 # ══════════════════════════════════════════════════════════════════════════
-def calcular_banda_mercado(precio_predicho: float, calibracion: dict) -> dict:
+def calcular_banda_mercado(costo_total_predicho: float, calibracion: dict) -> dict:
     bordes_deciles = calibracion["bordes_deciles_precio"]
     stats_por_decil = calibracion["stats_por_decil"]
     mad_scale = calibracion["mad_scale_const"]
     umbral_oportunidad = calibracion["umbral_oportunidad"]
     umbral_caro = calibracion["umbral_caro"]
 
-    decil = int(pd.cut([precio_predicho], bins=bordes_deciles, labels=False, include_lowest=True)[0])
+    decil = int(pd.cut([costo_total_predicho], bins=bordes_deciles, labels=False, include_lowest=True)[0])
     stats_decil = stats_por_decil[str(decil)]
     mediana_decil = stats_decil["mediana_error"]
     mad_ajustado = stats_decil["mad_error"] * mad_scale
 
-    limite_inferior = precio_predicho + mediana_decil - umbral_oportunidad * mad_ajustado
-    limite_superior = precio_predicho + mediana_decil + umbral_caro * mad_ajustado
+    limite_inferior = costo_total_predicho + mediana_decil - umbral_oportunidad * mad_ajustado
+    limite_superior = costo_total_predicho + mediana_decil + umbral_caro * mad_ajustado
 
     return {
         "decil": decil,
@@ -274,24 +283,34 @@ def predecir_propiedad_manual() -> dict:
         con_original.close()
 
     pred_matrix = modelo_info["predict_ensemble_matrix"](modelo_info["models"], X)
-    precio_predicho = float(pred_matrix.mean(axis=0)[0])
+    costo_total_predicho = float(pred_matrix.mean(axis=0)[0])
     pred_std = float(pred_matrix.std(axis=0)[0])
-    cv_ensamble = pred_std / precio_predicho if precio_predicho else float("inf")
+    cv_ensamble = pred_std / costo_total_predicho if costo_total_predicho else float("inf")
 
-    banda = calcular_banda_mercado(precio_predicho, modelo_info["calibracion"])
+    banda = calcular_banda_mercado(costo_total_predicho, modelo_info["calibracion"])
     confianza = nivel_confianza_de(cv_ensamble, modelo_info["calibracion"])
+
+    # El modelo predice costo total (arriendo + gastos comunes, ver
+    # costo_total_clp en 01_ingenieria_variables.py); GASTOS_COMUNES es un
+    # input del usuario, no una feature del modelo (ver construir_fila_features),
+    # así que el arriendo "implícito" se despeja restándolo del costo total.
+    arriendo_implicito = costo_total_predicho - GASTOS_COMUNES
 
     resultado = {
         "version_modelo": modelo_info["version_modelo"],
-        "precio_predicho": precio_predicho,
+        "costo_total_predicho": costo_total_predicho,
+        "arriendo_implicito": arriendo_implicito,
+        "gastos_comunes_input": GASTOS_COMUNES,
         "cv_ensamble": cv_ensamble,
         "nivel_confianza": confianza,
         **banda,
     }
 
     print(f"Modelo vigente: {resultado['version_modelo']}")
-    print(f"Precio estimado: {resultado['precio_predicho']:,.0f} CLP")
-    print(f"Rango de precio 'de mercado': {resultado['limite_inferior']:,.0f} - {resultado['limite_superior']:,.0f} CLP "
+    print(f"Costo total mensual estimado (arriendo + gastos comunes): {resultado['costo_total_predicho']:,.0f} CLP")
+    print(f"  -> con gastos comunes={resultado['gastos_comunes_input']:,.0f} CLP, "
+          f"arriendo implícito ≈ {resultado['arriendo_implicito']:,.0f} CLP")
+    print(f"Rango de costo total 'de mercado': {resultado['limite_inferior']:,.0f} - {resultado['limite_superior']:,.0f} CLP "
           f"(decil {resultado['decil']})")
     print(f"Confianza de la estimación: {resultado['nivel_confianza']} (cv_ensamble={resultado['cv_ensamble']:.4f})")
 

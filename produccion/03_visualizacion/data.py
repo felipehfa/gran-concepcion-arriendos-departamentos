@@ -31,7 +31,7 @@ _QUERY = """
 WITH ultima_prediccion AS (
     SELECT
         id_aviso,
-        precio_predicho,
+        costo_total_predicho,
         z_robusto,
         etiqueta,
         nivel_confianza,
@@ -63,7 +63,7 @@ SELECT
     d.latitud,
     d.longitud,
     d.fecha_publicacion_aprox,
-    p.precio_predicho,
+    p.costo_total_predicho,
     p.z_robusto,
     p.etiqueta,
     p.nivel_confianza

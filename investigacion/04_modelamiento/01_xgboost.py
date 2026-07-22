@@ -54,7 +54,7 @@ DATASET_PATH  = INGENIERIA_VARIABLES_DIR / "datos_ingenieria_variables.csv"
 SAVE_MODEL_DIR = SCRIPT_DIR / "save" / "model"
 
 ID_COL     = "id_aviso"
-TARGET_COL = "precio_clp"
+TARGET_COL = "costo_total_clp"
 
 SEED       = 42
 MODEL_NAME = "xgboost_regression_precio"
@@ -103,10 +103,11 @@ SEEDS_STABILITY = [STABILITY_SEED_BASE + i for i in range(N_SEEDS_STABILITY)]
 N_TRIALS_OPTUNA_STABILITY = N_TRIALS_OPTUNA
 CV_SPLITS_OPTUNA_STABILITY = CV_SPLITS_OPTUNA
 
-# Etiquetado oportunidad/caro/precio_de_mercado (test): deciles de precio_clp
-# usados para normalizar el error del modelo por segmento de precio.
-# Distintos de N_ESTRATOS_PRECIO (quintiles), que se usan solo para el split
-# y el reporting de evaluación existente y no cambian.
+# Etiquetado oportunidad/caro/precio_de_mercado (test): deciles de
+# costo_total_clp (TARGET_COL) usados para normalizar el error del modelo
+# por segmento de costo total. Distintos de N_ESTRATOS_PRECIO (quintiles),
+# que se usan solo para el split y el reporting de evaluación existente y
+# no cambian.
 N_DECILES_OPORTUNIDAD = 10
 
 # Constante de escalamiento del MAD (median absolute deviation) para que sea
@@ -114,9 +115,10 @@ N_DECILES_OPORTUNIDAD = 10
 MAD_SCALE_CONST = 1.4826
 
 # Umbrales (en desviaciones robustas, z_robusto) para las etiquetas de
-# precio. error = precio_real - precio_predicho: precio_real por DEBAJO de
-# lo esperado por el modelo (ajustado por decil) → "oportunidad" (z muy
-# negativo); por ENCIMA → "caro" (z muy positivo).
+# costo total. error = costo_total_real - costo_total_predicho:
+# costo_total_real por DEBAJO de lo esperado por el modelo (ajustado por
+# decil) → "oportunidad" (z muy negativo); por ENCIMA → "caro" (z muy
+# positivo).
 UMBRAL_OPORTUNIDAD = 1.0
 UMBRAL_CARO = 1.0
 
@@ -793,10 +795,10 @@ def calcular_z_robusto_por_decil(
     mad_scale: float = MAD_SCALE_CONST,
 ) -> dict:
     """
-    Divide `y_true` (precio_clp) en `n_deciles` grupos y calcula, para cada
-    fila, el error (precio_real - precio_predicho) normalizado de forma
-    robusta contra la mediana y el MAD del error dentro de su propio decil
-    de precio:
+    Divide `y_true` (costo_total_clp) en `n_deciles` grupos y calcula, para
+    cada fila, el error (costo_total_real - costo_total_predicho)
+    normalizado de forma robusta contra la mediana y el MAD del error
+    dentro de su propio decil de costo total:
 
         z_robusto = (error - mediana_decil) / (MAD_decil * mad_scale)
 
@@ -866,13 +868,13 @@ def etiquetar_oportunidades(
     umbral_caro: float = UMBRAL_CARO,
 ) -> tuple:
     """
-    Para cada propiedad del set de test, compara su precio real contra el
-    promedio predicho por el ensamble de bagging, normalizado dentro de su
-    propio decil de precio (ver `calcular_z_robusto_por_decil`), y la
-    etiqueta como:
-      - "oportunidad": precio real por DEBAJO de lo esperado (z_robusto muy
-        negativo) — más barata que propiedades comparables.
-      - "caro": precio real por ENCIMA de lo esperado (z_robusto muy
+    Para cada propiedad del set de test, compara su costo total real
+    (arriendo + gastos comunes) contra el promedio predicho por el ensamble
+    de bagging, normalizado dentro de su propio decil de costo total (ver
+    `calcular_z_robusto_por_decil`), y la etiqueta como:
+      - "oportunidad": costo total real por DEBAJO de lo esperado (z_robusto
+        muy negativo) — más barata que propiedades comparables.
+      - "caro": costo total real por ENCIMA de lo esperado (z_robusto muy
         positivo).
       - "precio_de_mercado": dentro del rango normal para su decil.
 
@@ -900,8 +902,8 @@ def etiquetar_oportunidades(
     etiqueta_final = np.array([f"{e} ({c})" for e, c in zip(etiqueta, nivel_confianza)])
 
     resultado = pd.DataFrame({
-        "precio_real":         y_true,
-        "precio_predicho":     y_pred,
+        "costo_total_real":      y_true,
+        "costo_total_predicho":  y_pred,
         "error":               z_info["error"],
         "decil_precio":        z_info["deciles"],
         "mediana_error_decil": z_info["mediana_por_decil"],
@@ -917,7 +919,7 @@ def etiquetar_oportunidades(
 
     print(f"\n{'='*60}")
     print(f"ETIQUETADO OPORTUNIDAD/CARO — Test ({len(resultado)} filas, "
-          f"{N_DECILES_OPORTUNIDAD} deciles de precio, "
+          f"{N_DECILES_OPORTUNIDAD} deciles de costo total, "
           f"umbral_oportunidad={umbral_oportunidad}, umbral_caro={umbral_caro})")
     print("="*60)
 

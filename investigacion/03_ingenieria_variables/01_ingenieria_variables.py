@@ -451,8 +451,22 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
 def filtrar_precio_maximo(df: pd.DataFrame, precio_maximo: float = PRECIO_MAXIMO_ARRIENDO_CLP) -> pd.DataFrame:
     """Descarta avisos con precio_clp por sobre `precio_maximo`: a ese nivel
     ya no son arriendos sino ventas mal clasificadas. Requiere que
-    'precio_clp' ya haya sido calculada (ver `convertir_precios_uf_a_clp`)."""
+    'precio_clp' ya haya sido calculada (ver `convertir_precios_uf_a_clp`).
+    El filtro se aplica sobre el arriendo nominal (precio_clp), no sobre el
+    costo total: lo que detecta es una venta mal clasificada como arriendo,
+    algo que depende del precio pactado, no de los gastos comunes."""
     df = df[df["precio_clp"] <= precio_maximo]
+    return df
+
+
+def agregar_costo_total(df: pd.DataFrame) -> pd.DataFrame:
+    """Crea 'costo_total_clp' = precio_clp + gastos_comunes: el costo mensual
+    real de vivir en la propiedad (arriendo + gastos comunes), que es la
+    variable objetivo del modelo. Requiere que 'precio_clp' (convertir_precios_uf_a_clp)
+    y 'gastos_comunes' (ya limpia/numérica vía preprocesar_variables_amenities)
+    existan de antemano. 'precio_clp' se conserva en el dataset como columna
+    informativa, no como feature ni target."""
+    df["costo_total_clp"] = df["precio_clp"] + df["gastos_comunes"]
     return df
 
 
@@ -529,10 +543,14 @@ def agregar_nivel_barrio(df: pd.DataFrame, ruta_salida_json: str = RUTA_SALIDA_N
     disponibles, lo guarda en `ruta_salida_json` (para reutilizarlo con avisos
     futuros sin tener que recalcularlo) y agrega la columna 'nivel_barrio' al
     DataFrame, reemplazando a la columna 'barrio' original.
+
+    Se basa en costo_total_clp (arriendo + gastos comunes), no en precio_clp:
+    "qué tan caro es el barrio" debe reflejar el costo mensual real, no solo
+    el arriendo nominal.
     """
-    columnas_numericas = ["precio_clp", "superficie_util_m2"]
+    columnas_numericas = ["costo_total_clp", "superficie_util_m2"]
     df[columnas_numericas] = df[columnas_numericas].apply(pd.to_numeric, errors="coerce")
-    df["_precio_m2"] = df["precio_clp"] / df["superficie_util_m2"].replace(0, np.nan)
+    df["_precio_m2"] = df["costo_total_clp"] / df["superficie_util_m2"].replace(0, np.nan)
 
     mapa_barrio_a_nivel, nivel_default, cortes_valor, stats_barrios = calcular_niveles_barrio(
         df, columna_precio_m2="_precio_m2", columna_barrio="barrio"
@@ -695,12 +713,14 @@ def agregar_precio_m2_sector(df: pd.DataFrame, radio_metros: float = RADIO_METRO
     pipeline). precio_m2 se usa aquí SOLO como variable auxiliar interna
     para promediar el sector - no se guarda en df ni se usa como feature
     directa del modelo (usarla tal cual sería fuga de datos, porque viene del
-    precio de la propia fila). Si un aviso no tiene vecinos cercanos válidos,
-    cae a la mediana general del grupo, y queda marcado en
+    costo de la propia fila). Se basa en costo_total_clp (arriendo + gastos
+    comunes), no en precio_clp, para que el comparador de mercado quede en
+    la misma escala que el target. Si un aviso no tiene vecinos cercanos
+    válidos, cae a la mediana general del grupo, y queda marcado en
     'tiene_comparables_cercanos' = False para poder distinguir ese caso de un
     vecino real con valor 0.
     """
-    precio_m2_auxiliar = df["precio_clp"] / df["superficie_util_m2"].replace(0, np.nan)
+    precio_m2_auxiliar = df["costo_total_clp"] / df["superficie_util_m2"].replace(0, np.nan)
 
     for columna in tipos_propiedad_columnas.values():
         df[columna] = np.nan  # se rellena con el fallback más abajo si no hay vecinos
@@ -1079,6 +1099,10 @@ def ejecutar_pipeline(
     # El filtro por precio_clp necesita esta columna ya calculada, por eso se
     # aplica aquí y no inmediatamente después de eliminar_registros_incompletos.
     df = filtrar_precio_maximo(df)
+    # costo_total_clp (target del modelo) se calcula después del filtro de
+    # arriendo máximo, para que ese filtro siga evaluando solo el arriendo
+    # nominal, y antes de nivel_barrio/precio_m2_sector, que ya lo usan.
+    df = agregar_costo_total(df)
 
     df = agregar_nivel_barrio(df, ruta_salida_niveles_barrio)
 
