@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 LIMITE_NUEVOS_POR_CORRIDA = 2000
 
-DIAS_MIN_ENTRE_RECHEQUEOS = 7
+DIAS_MIN_ENTRE_RECHEQUEOS = 3
 MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200
 
 # Umbral de fallos de scraping CONSECUTIVOS (entre corridas) antes de marcar
@@ -94,12 +94,14 @@ CLAVES_ESTADO_PUBLICACION = ("item_status_message", "item_status_short_descripti
 
 
 def _buscar_nodo_por_clave(nodo, claves) -> dict:
-    """Búsqueda recursiva del primer dict que contenga alguna de `claves`
-    como llave propia, devolviendo su valor (el sub-dict del componente)."""
+    """Búsqueda recursiva del primer componente (dict) cuyo campo "id" sea
+    alguna de `claves`, devolviendo el componente completo (no el valor de
+    "id"): en el JSON real de la página cada componente es un dict con forma
+    {"id": "item_status_message", "body": {...}, ...} - "item_status_message"
+    es el VALOR de la llave "id", no una llave propia del dict."""
     if isinstance(nodo, dict):
-        for clave in claves:
-            if clave in nodo:
-                return nodo[clave]
+        if nodo.get("id") in claves:
+            return nodo
         for valor in nodo.values():
             resultado = _buscar_nodo_por_clave(valor, claves)
             if resultado is not None:
@@ -126,7 +128,15 @@ def extraer_estado_publicacion(estado: dict) -> str:
     if not estado or not isinstance(estado, dict):
         return "activo"
 
-    components = estado.get("components") if isinstance(estado.get("components"), dict) else {}
+    # `estado` es el JSON completo de window._n.ctx.r: "components" no está
+    # en su raíz, sino anidado en appProps.pageProps.initialState.components.
+    initial_state = estado.get("appProps")
+    initial_state = initial_state.get("pageProps") if isinstance(initial_state, dict) else None
+    initial_state = initial_state.get("initialState") if isinstance(initial_state, dict) else None
+
+    components = initial_state.get("components") \
+        if isinstance(initial_state, dict) and isinstance(initial_state.get("components"), dict) \
+        else {}
     subarboles = [components.get("head"), components.get("short_description")]
 
     for subarbol in subarboles:
