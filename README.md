@@ -14,7 +14,11 @@ comparación de XGBoost vs. LightGBM sobre las mismas 29 features, todo respalda
 pipeline de producción independiente (cron + base propia) y un dashboard Streamlit. El modelo de
 producción vigente (**LightGBM**) logra **MAE 61.470 CLP / MAPE 10.05% / R² 0.80** en test — una
 reducción de MAE del 57% frente al baseline de media de train y del 34% frente a un "costo total
-de mercado ingenuo" (costo total/m² × superficie).
+de mercado ingenuo" (costo total/m² × superficie). Un análisis de valores **SHAP** sobre ese
+mismo modelo (sección 4.1) muestra que las variables físicas del departamento (superficie, baños,
+estacionamientos) concentran **~75%** de la importancia total, ubicación/mercado local **~16%**,
+y contexto socioeconómico del sector **~9%** — superficie útil y número de baños, por sí solas,
+explican cerca de un tercio de la predicción.
 
 ![Buscador de oportunidades de arriendo — Gran Concepción](docs/images/dashboard-screenshot.png)
 
@@ -370,6 +374,86 @@ Vecinal)**
 > `cantidad_centros_comerciales`, `pob_rsh_uv` y `c_ig_com` (features del modelo anterior) no
 > quedaron entre las 29 finales de esta corrida; `hog_uv` y `cantidad_universidades` sí, y no
 > estaban en la selección anterior.
+
+### 4.1 Interpretabilidad: importancia y dirección de las variables (SHAP)
+
+**Qué es un valor SHAP**: para una predicción puntual, un valor SHAP (SHapley Additive
+exPlanations, Lundberg & Lee 2017) reparte la diferencia entre esa predicción y la predicción
+"base" (el promedio del modelo sobre el dataset) entre las features que la generaron, de forma
+aditiva: `predicción = valor_base + Σ shap_i` sobre las 29 features. Cada `shap_i` es la
+contribución (en CLP) de esa feature a **esa** predicción puntual, con signo (empuja el costo
+hacia arriba o hacia abajo) — a diferencia de una importancia de features "global" tradicional
+(p. ej. gain de un árbol), que no distingue predicción por predicción ni dirección. En modelos de
+árboles como LightGBM, **TreeSHAP** (Lundberg et al. 2020) calcula estos valores de forma
+**exacta** (no una aproximación por muestreo), recorriendo la estructura de cada árbol — es la
+misma técnica que ya usaba el pipeline para seleccionar las 29 features finales por estabilidad
+(sección 6), acá aplicada al modelo de producción ya entrenado para explicar sus predicciones en
+vez de para elegir variables.
+
+**Cómo se calculó acá**: `produccion/02_pruebas/analisis_shap.py` (script de validación manual,
+no forma parte del pipeline) toma el ensamble de producción vigente
+(`v0006_20260721211302_lightgbm_5fbde493`) y calcula, para cada uno de los 245 avisos de test, la
+contribución SHAP de las 29 features vía `Booster.predict(..., pred_contrib=True)` (TreeSHAP
+nativo de LightGBM, sin depender de la librería externa `shap`), promediada entre los 10 modelos
+del bagging. La **magnitud** reportada es el promedio de `|shap|` de cada feature sobre los 245
+avisos de test (mismo cálculo que ya persiste `parametros_produccion.json` bajo
+`shap_importance`); la **dirección** se estima con la correlación de Pearson, fila a fila, entre
+el valor crudo de la feature y su propia contribución SHAP — una lectura simple que resume bien
+features mayormente monótonas (superficie, conteos, dummies 0/1), pero no captura interacciones
+ni relaciones fuertemente no lineales.
+
+![Importancia SHAP de las 15 variables más determinantes del costo total](docs/images/shap_importancia.png)
+
+| # | Feature | Importancia SHAP (CLP/mes) | % del total | Dirección |
+|--:|---|---:|---:|---|
+| 1 | `superficie_util_m2` | 42.364 | 18,1% | ↑ sube el costo |
+| 2 | `banos` | 40.963 | 17,5% | ↑ sube el costo |
+| 3 | `superficie_total_m2` | 33.848 | 14,5% | ↑ sube el costo |
+| 4 | `estacionamientos` | 16.130 | 6,9% | ↑ sube el costo |
+| 5 | `precio_m2_sector_departamento` | 12.769 | 5,5% | ↑ sube el costo |
+| 6 | `amoblado` | 9.093 | 3,9% | ↑ sube el costo |
+| 7 | `distancia_centro_concepcion_m` | 8.445 | 3,6% | ↓ baja el costo |
+| 8 | `rank_nac` | 8.042 | 3,4% | ↑ sube el costo |
+| 9 | `p_urbano` | 7.107 | 3,0% | ↓ baja el costo |
+| 10 | `ascensor` | 6.724 | 2,9% | ↑ sube el costo |
+| 11-29 | resto (19 features: `hog_uv`, `piso_unidad`, `antiguedad_anos`, `piscina`, `bodegas`, conteos de POI, etc.) | — | ~9,8% acumulado | mixta — ver CSV completo |
+
+Tabla completa (29 features, magnitud + dirección) en
+`produccion/02_pruebas/save/analisis_shap/shap_importancia.csv` (se regenera corriendo
+`python produccion/02_pruebas/analisis_shap.py`).
+
+**Lectura**:
+
+- Las tres variables de mayor peso (superficie útil, baños, superficie total) suman **50,0%** de
+  la importancia total — el tamaño y la cantidad de baños son, con diferencia, lo que más mueve
+  la predicción, algo esperable en un mercado de arriendo. `banos` pesa casi tanto como
+  `superficie_util_m2` pese a tomar solo un puñado de valores enteros (0-5), lo que sugiere que
+  actúa como proxy fuerte de "categoría" del departamento (más baños ≈ departamento más
+  grande/premium) más allá de lo que ya capturan las dos variables de superficie.
+- `estacionamientos` (6,9%) y `amoblado` (3,9%) son los siguientes atributos físicos más
+  influyentes; el resto de las amenities (piscina, bodega, conserjería, ascensor, condominio
+  cerrado, piso) pesan individualmente poco (0,9%-2,9%) pero suman **~12%** en conjunto — hay
+  muchas comodidades menores, ninguna decisiva por sí sola. En total, las **características
+  físicas de la propiedad** (grupo completo de la sección 4, incluida `antiguedad_anos`) explican
+  **~75%** de la importancia SHAP total.
+- De ubicación/mercado (**~16%** del total), `precio_m2_sector_departamento` (5,5%) y la distancia
+  al centro de Concepción (3,6%, dirección negativa: alejarse del centro baja el costo predicho)
+  son las más relevantes. Los conteos de POI (colegios, plazas, farmacias, etc.) pesan muy poco
+  individualmente (0,2%-1,0% cada uno) y varios muestran correlación casi nula o incluso negativa
+  con el costo (más farmacias o plazas cercanas se asocian a costos algo *menores*) —
+  probablemente porque esos servicios son más densos en sectores populosos y no necesariamente más
+  caros, y el modelo ya captura la ubicación "cara" principalmente a través de
+  `precio_m2_sector_departamento` y `nivel_barrio`.
+- El **contexto socioeconómico** (`rank_nac`, `p_urbano`, `hog_uv`) suma **~9%** y muestra una
+  dirección consistente entre sí: `rank_nac` correlaciona positivo con el costo, mientras
+  `p_urbano` y `hog_uv` correlacionan negativo — coherente con que las tres describen el mismo
+  fenómeno (perfil socioeconómico de la Unidad Vecinal) desde ángulos distintos. La escala exacta
+  de "más o menos vulnerable" de `rank_nac` no está documentada en este repo más allá del nombre
+  de columna (viene directo del shapefile IGVUST externo, sección 3.2), así que esta lectura de
+  dirección es descriptiva, no una afirmación causal sobre vulnerabilidad.
+- `antiguedad_anos` es la única variable física con dirección negativa clara (corr ≈ −0,60):
+  departamentos más antiguos tienden a costar menos, como es esperable, aunque su peso relativo
+  (2,3%) es menor que el de las variables de tamaño.
 
 ---
 

@@ -1,8 +1,64 @@
 """Contenido de la pestaña 'Cómo funciona': metodología, precisión y advertencias."""
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 
-from styles import COLOR_TEXT_TITLE
+from styles import COLOR_CARO, COLOR_OPORTUNIDAD, COLOR_TEXT_TITLE
+
+# Gráfico de importancia SHAP, generado por produccion/02_pruebas/analisis_shap.py
+# (script de validación manual, no forma parte del pipeline) contra el modelo de
+# producción vigente, y copiado a docs/images/ para que tanto el README como esta
+# app lo usen sin duplicar el archivo. Se embebe como data URI (en vez de una URL)
+# para no depender de cómo Streamlit Cloud sirve archivos estáticos fuera de este
+# directorio.
+_SHAP_IMG_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "images" / "shap_importancia.png"
+
+
+def _shap_img_data_uri() -> str:
+    data = _SHAP_IMG_PATH.read_bytes()
+    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+
+# Top 10 features por importancia SHAP (magnitud + dirección) del modelo vigente
+# (v0006_20260721211302_lightgbm_5fbde493), calculadas por
+# produccion/02_pruebas/analisis_shap.py sobre los 245 avisos de test — ver sección 4.1
+# del README para la metodología y la tabla completa (29 features). Contenido estático
+# (no se lee en vivo), igual que el resto de las cifras de este archivo: hay que
+# actualizarlo a mano si se reentrena el modelo y cambia el ranking.
+_SHAP_TOP10 = [
+    ("Superficie útil", "18,1%", "sube"),
+    ("Número de baños", "17,5%", "sube"),
+    ("Superficie total", "14,5%", "sube"),
+    ("Número de estacionamientos", "6,9%", "sube"),
+    ("Costo total/m² de comparables cercanos", "5,5%", "sube"),
+    ("Amoblado", "3,9%", "sube"),
+    ("Distancia al centro de Concepción", "3,6%", "baja"),
+    ("Vulnerabilidad del sector (ranking nacional)", "3,4%", "sube"),
+    ("Porcentaje urbano del sector", "3,0%", "baja"),
+    ("Ascensor", "2,9%", "sube"),
+]
+
+_SHAP_DIRECCION_ICONO = {"sube": ("↑", COLOR_OPORTUNIDAD), "baja": ("↓", COLOR_CARO)}
+
+
+def _render_shap_tabla() -> str:
+    filas = "".join(
+        f"<tr>"
+        f"<td style='padding:4px 10px 4px 0;'>{i}</td>"
+        f"<td style='padding:4px 10px 4px 0;font-weight:600;'>{nombre}</td>"
+        f"<td style='padding:4px 10px 4px 0;text-align:right;'>{pct}</td>"
+        f"<td style='padding:4px 0;color:{_SHAP_DIRECCION_ICONO[direccion][1]};font-weight:700;'>"
+        f"{_SHAP_DIRECCION_ICONO[direccion][0]} {'sube el costo' if direccion == 'sube' else 'baja el costo'}</td>"
+        f"</tr>"
+        for i, (nombre, pct, direccion) in enumerate(_SHAP_TOP10, start=1)
+    )
+    return f"""<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+<tr style="color:{COLOR_TEXT_TITLE};font-weight:700;">
+<td style='padding:4px 10px 4px 0;'>#</td><td>Variable</td>
+<td style='text-align:right;padding:4px 10px 4px 0;'>% del total</td><td>Dirección</td>
+</tr>{filas}</table>"""
 
 # Las 29 features que usa el modelo vigente (ver 03_ingenieria_variables/save/seleccion_variables/
 # selected_features.csv y sección 4 del README), agrupadas igual que ahí, con una explicación en
@@ -126,6 +182,34 @@ del modelo.
 """
         + _render_grupos_features()
         + """
+
+</div>
+
+<div class="app-card">
+
+### Qué variables pesan más en la predicción (SHAP)
+
+No todas las 29 variables influyen por igual. Para medir cuánto pesa cada una, este modelo usa
+**valores SHAP**: por cada aviso, el modelo reparte la diferencia entre su predicción y el
+promedio general del mercado entre las variables que la explican — cada variable recibe una
+contribución en pesos chilenos, positiva (empuja el costo hacia arriba) o negativa (lo empuja
+hacia abajo), y la suma de todas esas contribuciones más el promedio general da la predicción
+final de ese aviso. Es una técnica exacta para modelos de árboles como este (no una
+aproximación), y es la misma que ya se usó para elegir estas 29 variables entre 41 candidatas.
+
+Promediando esas contribuciones (en valor absoluto) sobre los 245 avisos de test se obtiene qué
+tan determinante es cada variable **en general** — no para un aviso puntual:
+
+"""
+        + f'<img src="{_shap_img_data_uri()}" alt="Importancia SHAP de las variables" style="width:100%;max-width:640px;display:block;margin:6px auto;" />'
+        + _render_shap_tabla()
+        + """
+
+Las **características físicas** (superficie, baños, estacionamientos y el resto de las
+amenities) concentran en conjunto **~75%** de la importancia total, ubicación y mercado local
+**~16%**, y el contexto socioeconómico del sector **~9%**. Superficie útil y número de baños,
+por sí solas, ya explican cerca de un tercio de cada predicción — son, con diferencia, lo que
+más mueve el costo total estimado.
 
 </div>
 
