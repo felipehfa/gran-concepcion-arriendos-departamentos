@@ -72,7 +72,7 @@ log = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 LIMITE_NUEVOS_POR_CORRIDA = 2000
 
-DIAS_MIN_ENTRE_RECHEQUEOS = 3
+DIAS_MIN_ENTRE_RECHEQUEOS = 1
 MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200
 
 # Umbral de fallos de scraping CONSECUTIVOS (entre corridas) antes de marcar
