@@ -1,1 +1,1 @@
-produccion/01_modelo_produccion/*.db merge=keep-incoming
+produccion/01_modelo_produccion/*.db -merge

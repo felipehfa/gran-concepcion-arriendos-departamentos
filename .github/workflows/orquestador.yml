@@ -43,6 +43,7 @@ jobs:
           git add produccion/01_modelo_produccion/produccion_gran_concepcion.db
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           git diff --staged --quiet || git commit -m "Actualización automática BD producción [skip ci] - $TIMESTAMP"
-          git fetch origin main
-          git merge -X ours --no-edit origin/main
-          git push origin HEAD:main
+          # Push simple, sin merge automático: si main avanzó durante la corrida (ej. un
+          # push local con cambios en la BD), se descarta esta actualización en vez de
+          # pisarlo - la próxima corrida programada parte de la versión más reciente.
+          git push origin HEAD:main || echo "::warning::Push rechazado (main avanzó durante la corrida); se descarta esta actualización de BD para no pisar otros cambios. La próxima corrida programada lo reintenta."
