@@ -63,6 +63,7 @@ SELECT
     d.latitud,
     d.longitud,
     d.fecha_publicacion_aprox,
+    d.fecha_scrapeo,
     p.costo_total_predicho,
     p.z_robusto,
     p.etiqueta,
@@ -76,6 +77,13 @@ WHERE a.tipo_propiedad = 'departamento'
   AND d.latitud IS NOT NULL
   AND d.longitud IS NOT NULL
 """
+
+# Misma query que _QUERY pero sin restringir estado_publicacion: usada por la
+# pestaña de estadísticas diarias (historial.py), que necesita ver también
+# los avisos 'finalizado'/'no_disponible' para saber qué atributos tenían
+# (precio, comuna, etc.) y poder aplicarles los mismos filtros del buscador
+# antes de cruzarlos contra historial_diario_avisos.
+_QUERY_TODOS_LOS_ESTADOS = _QUERY.replace("  AND a.estado_publicacion IN ('activo', 'pausado')\n", "")
 
 
 def _cargar_ingenieria_variables():
@@ -99,13 +107,7 @@ def _cargar_ingenieria_variables():
     return modulo
 
 
-@st.cache_data(ttl=600, show_spinner="Cargando avisos...")
-def load_data() -> pd.DataFrame:
-    """Lee avisos de departamentos en arriendo con su predicción más reciente.
-
-    Cacheada 10 min: la base la actualiza el orquestador en segundo plano,
-    no en cada request del usuario.
-    """
+def _leer_avisos(query: str) -> pd.DataFrame:
     # timeout alto: el orquestador puede estar escribiendo en la misma BD en
     # paralelo (una fila cada ~0.5s durante la etapa de predicción).
     #
@@ -119,15 +121,16 @@ def load_data() -> pd.DataFrame:
         try:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             try:
-                df = pd.read_sql_query(_QUERY, conn)
+                return pd.read_sql_query(query, conn)
             finally:
                 conn.close()
-            break
         except sqlite3.OperationalError:
             if intento == intentos:
                 raise
             time.sleep(2 * intento)
 
+
+def _procesar_avisos(df: pd.DataFrame) -> pd.DataFrame:
     if not df.empty:
         iv = _cargar_ingenieria_variables()
         df = iv.convertir_precios_uf_a_clp(df, ruta_bd=str(DB_PATH))
@@ -155,3 +158,33 @@ def load_data() -> pd.DataFrame:
     df["banos"] = df["banos"].fillna(0).astype(int)
 
     return df
+
+
+@st.cache_data(ttl=600, show_spinner="Cargando avisos...")
+def load_data() -> pd.DataFrame:
+    """Lee avisos de departamentos en arriendo ACTIVOS/PAUSADOS con su
+    predicción más reciente (usado por el buscador).
+
+    Cacheada 10 min: la base la actualiza el orquestador en segundo plano,
+    no en cada request del usuario.
+    """
+    return _procesar_avisos(_leer_avisos(_QUERY))
+
+
+@st.cache_data(ttl=600, show_spinner="Cargando historial de avisos...")
+def load_data_todos_los_estados() -> pd.DataFrame:
+    """Igual que `load_data()`, pero sin excluir avisos 'finalizado'/
+    'no_disponible'. Usado por la pestaña de estadísticas diarias
+    (historial.py) para poder filtrar avisos que ya salieron del mercado por
+    los mismos atributos (precio, comuna, etc.) que usa el buscador."""
+    return _procesar_avisos(_leer_avisos(_QUERY_TODOS_LOS_ESTADOS))
+
+
+@st.cache_data(ttl=600, show_spinner="Cargando historial diario...")
+def load_historial_diario() -> pd.DataFrame:
+    """Lee el snapshot diario de estado_publicacion por aviso (ver
+    06_historial_diario.py en produccion/01_modelo_produccion), desde el
+    23/07/2026 en adelante."""
+    return _leer_avisos(
+        "SELECT fecha, id_aviso, estado_publicacion FROM historial_diario_avisos ORDER BY fecha"
+    )

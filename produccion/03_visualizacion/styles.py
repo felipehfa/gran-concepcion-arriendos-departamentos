@@ -16,6 +16,13 @@ COLOR_CONFIANZA_ALTA = "#2E7D32"
 COLOR_CONFIANZA_MEDIA = "#B8860B"
 COLOR_CONFIANZA_BAJA = "#8A8A8A"
 
+# Paleta categórica para series estadísticas (ej. media/mediana/desviación
+# estándar en historial.py) - naranja y aqua, NO verde/rojo: esos ya
+# significan "oportunidad"/"caro" en el resto de la app (ver
+# COLOR_OPORTUNIDAD/COLOR_CARO arriba) y reusarlos acá confundiría.
+COLOR_SERIE_2 = "#eb6834"
+COLOR_SERIE_3 = "#1baf7a"
+
 ETIQUETA_LABELS = {
     "oportunidad": "Oportunidad",
     "precio_de_mercado": "Precio de mercado",
@@ -101,13 +108,13 @@ def inject_css() -> None:
             border-radius: 10px;
             border-color: transparent !important;
         }}
-        .app-card, [data-testid="stSidebarUserContent"] {{
+        .app-card, [data-testid="stSidebarUserContent"], [class*="st-key-chart-card"] {{
             background-color: {COLOR_CARD_BG};
             box-shadow: 0 1px 4px rgba(0,0,0,0.12);
             border-radius: 10px;
             padding: 16px 18px 14px 18px;
         }}
-        .app-card {{
+        .app-card, [class*="st-key-chart-card"] {{
             margin-bottom: 14px;
         }}
         [data-testid="stSidebarUserContent"] {{

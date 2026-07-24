@@ -3,7 +3,9 @@ Orquestador del pipeline de producción — Gran Concepción Rentals.
 
 Ejecuta en orden: scraper grilla incremental -> scraper detalle incremental
 (incluye re-chequeo de estado) -> vulnerabilidad -> ingeniería de variables
--> predicción (incluye inserción en `predicciones`).
+-> predicción (incluye inserción en `predicciones`) -> historial diario
+(snapshot del estado_publicacion de cada aviso en `historial_diario_avisos`,
+usado por la pestaña de estadísticas diarias del visualizador).
 
 Pensado para correr sin intervención manual vía cron / tarea programada
 (diaria o varias veces al día). Cada corrida:
@@ -249,6 +251,13 @@ def main():
         resumen = prediccion.generar_predicciones(con_produccion, con_original, features_df=features_df)
         log.info(f"Etapa prediccion completada en {time.time()-t0:.1f}s: {resumen}")
         r["version_modelo_usada"] = resumen["version_modelo"]
+
+        etapa_actual.valor = "historial_diario"
+        log.info("Iniciando etapa: historial_diario")
+        t0 = time.time()
+        historial = _cargar_modulo("produccion_historial_diario", SCRIPT_DIR / "06_historial_diario.py")
+        resumen = historial.capturar_snapshot_diario(con_produccion)
+        log.info(f"Etapa historial_diario completada en {time.time()-t0:.1f}s: {resumen}")
 
         r["resultado"] = "parcial" if hubo_corte_parcial else "ok"
 

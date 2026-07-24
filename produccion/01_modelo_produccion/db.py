@@ -75,6 +75,7 @@ def conectar_produccion(ruta_bd: Path = RUTA_BD_PRODUCCION) -> sqlite3.Connectio
     _migrar_esquema_poligonos_vulnerabilidad(con)
     _migrar_esquema_avisos_detalle(con)
     _migrar_esquema_predicciones(con)
+    _migrar_esquema_logs_ejecucion(con)
     return con
 
 
@@ -244,6 +245,60 @@ def _migrar_esquema_predicciones(con: sqlite3.Connection) -> None:
         con.commit()
 
 
+def _migrar_esquema_logs_ejecucion(con: sqlite3.Connection) -> None:
+    """
+    Igual que `_migrar_esquema_avisos`: si la tabla ya existía de antes con
+    el CHECK viejo de `etapa` (sin 'historial_diario', la nueva etapa que
+    guarda el snapshot diario de avisos), la reconstruye completa porque
+    SQLite no permite modificar un CHECK con ALTER TABLE.
+    """
+    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(logs_ejecucion)").fetchall()}
+    if not columnas:
+        return
+
+    definicion_actual = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='logs_ejecucion'"
+    ).fetchone()[0]
+    if "historial_diario" in definicion_actual:
+        return
+
+    filas_antes = con.execute("SELECT COUNT(*) FROM logs_ejecucion").fetchone()[0]
+
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.execute("BEGIN")
+        con.execute("""
+            CREATE TABLE logs_ejecucion_nuevo (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_corrida  INTEGER REFERENCES corridas(id_corrida),
+                timestamp   TEXT NOT NULL,
+                etapa       TEXT CHECK(etapa IN
+                            ('scraper_grilla', 'scraper_detalle', 'rechequeo_estado',
+                             'vulnerabilidad', 'variables', 'prediccion', 'historial_diario',
+                             'insercion_bd', 'orquestador')),
+                nivel       TEXT CHECK(nivel IN ('info', 'warning', 'error')),
+                mensaje     TEXT NOT NULL,
+                detalle     TEXT
+            )
+        """)
+        con.execute("INSERT INTO logs_ejecucion_nuevo SELECT * FROM logs_ejecucion")
+        con.execute("DROP TABLE logs_ejecucion")
+        con.execute("ALTER TABLE logs_ejecucion_nuevo RENAME TO logs_ejecucion")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+    filas_despues = con.execute("SELECT COUNT(*) FROM logs_ejecucion").fetchone()[0]
+    if filas_despues != filas_antes:
+        raise RuntimeError(
+            f"Migración de `logs_ejecucion` perdió filas: antes={filas_antes}, después={filas_despues}. "
+            f"Revisa manualmente antes de seguir."
+        )
+
+
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
     """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
     Ningún script de produccion/01_modelo_produccion/ debe escribir en esta base."""
@@ -381,10 +436,20 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             timestamp   TEXT NOT NULL,
             etapa       TEXT CHECK(etapa IN
                         ('scraper_grilla', 'scraper_detalle', 'rechequeo_estado',
-                         'vulnerabilidad', 'variables', 'prediccion', 'insercion_bd', 'orquestador')),
+                         'vulnerabilidad', 'variables', 'prediccion', 'historial_diario',
+                         'insercion_bd', 'orquestador')),
             nivel       TEXT CHECK(nivel IN ('info', 'warning', 'error')),
             mensaje     TEXT NOT NULL,
             detalle     TEXT
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS historial_diario_avisos (
+            fecha               TEXT NOT NULL,
+            id_aviso            TEXT NOT NULL REFERENCES avisos(id_aviso),
+            estado_publicacion  TEXT NOT NULL,
+            PRIMARY KEY (fecha, id_aviso)
         )
     """)
 

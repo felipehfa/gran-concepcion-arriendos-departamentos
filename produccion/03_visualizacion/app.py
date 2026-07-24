@@ -8,6 +8,7 @@ from components import render_cards, render_map
 from data import load_data
 from explicacion import render as render_explicacion
 from filters import render_sidebar
+from historial import render as render_historial
 from styles import CONFIANZA_ORDER, ETIQUETA_ORDER, inject_css
 
 ORDER_OPTIONS = [
@@ -57,8 +58,12 @@ def sort_listings(df, order: str):
     if order == "Más recientes primero":
         # fecha_publicacion_aprox es aproximada (ver explicacion.py) y puede ser
         # nula (~1 de cada 5 avisos activos, el scraper no siempre la captura):
-        # esos avisos van al final en vez de asumirles una fecha.
-        return df.sort_values("fecha_publicacion_aprox", ascending=False, na_position="last")
+        # esos avisos van al final en vez de asumirles una fecha. fecha_scrapeo
+        # se usa solo como desempate (avisos con la misma fecha de publicación,
+        # o sin ella, quedan con el más recién scrapeado primero).
+        return df.sort_values(
+            ["fecha_publicacion_aprox", "fecha_scrapeo"], ascending=False, na_position="last"
+        )
     if order == "Precio: menor a mayor":
         return df.sort_values("precio", ascending=True)
     if order == "Precio: mayor a menor":
@@ -130,10 +135,15 @@ def main() -> None:
     st.set_page_config(page_title="Gran Concepción Rentals", layout="wide")
     inject_css()
 
-    tab_buscador, tab_explicacion = st.tabs(["🏠 Buscador", "ℹ️ Cómo funciona"])
+    tab_buscador, tab_historial, tab_explicacion = st.tabs(
+        ["🏠 Buscador", "📊 Estadísticas diarias", "ℹ️ Cómo funciona"]
+    )
 
     with tab_buscador:
         render_buscador()
+
+    with tab_historial:
+        render_historial()
 
     with tab_explicacion:
         st.markdown(

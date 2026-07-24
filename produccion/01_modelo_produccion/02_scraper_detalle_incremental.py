@@ -13,9 +13,15 @@ instalado (ej. GitHub Actions).
 Dos responsabilidades:
   1. Avisos NUEVOS de producción sin detalle todavía (LEFT JOIN, igual que
      el script original pero contra las tablas de producción).
-  2. RE-CHEQUEO de avisos con estado_publicacion='activo' cuyo último
-     chequeo tiene más de DIAS_MIN_ENTRE_RECHEQUEOS días, en batches de
-     MAX_AVISOS_RECHEQUEO_POR_CORRIDA (los más antiguos primero).
+  2. RE-CHEQUEO de avisos con estado_publicacion IN ('activo', 'pausado')
+     cuyo último chequeo tiene más de DIAS_MIN_ENTRE_RECHEQUEOS días, en
+     batches de MAX_AVISOS_RECHEQUEO_POR_CORRIDA (los más antiguos primero,
+     mezclando activos y pausados en el mismo orden por antigüedad de
+     chequeo). Se re-chequean los pausados también para detectar si vuelven
+     a 'activo', si siguen 'pausado' (se les actualiza igual
+     fecha_ultimo_chequeo_estado, para que no monopolicen los batches
+     futuros) o si pasan a 'no_disponible'/'finalizado'. Los avisos
+     'finalizado'/'no_disponible' NO se re-chequean: son estados terminales.
 
 Extrae además `estado_publicacion` (activo/pausado/finalizado/no_disponible)
 del mismo JSON embebido que ya se usa para los puntos de interés, buscando el
@@ -318,23 +324,32 @@ def obtener_pendientes_rechequeo(
     con, dias_min: int = DIAS_MIN_ENTRE_RECHEQUEOS, batch: int = MAX_AVISOS_RECHEQUEO_POR_CORRIDA,
 ) -> pd.DataFrame:
     """
-    Candidatos a re-chequeo: avisos activos nunca chequeados
+    Candidatos a re-chequeo: avisos activos O pausados nunca chequeados
     (fecha_ultimo_chequeo_estado IS NULL - ej. recién migrados del histórico,
     ver migracion_historico_a_produccion.py) O que superaron el umbral de
-    DIAS_MIN_ENTRE_RECHEQUEOS desde su último chequeo.
+    DIAS_MIN_ENTRE_RECHEQUEOS desde su último chequeo. Se incluyen los
+    pausados para detectar si vuelven a publicarse, no solo los activos que
+    podrían dejar de estarlo - 'finalizado'/'no_disponible' quedan afuera
+    por ser estados terminales que ya no cambian.
 
-    Los NULL van primero (son los más urgentes: nunca se confirmó que el
-    aviso siga activo) y entre ellos no hay un orden natural adicional, así
-    que ORDER BY ... ASC alcanza: SQLite ordena NULL antes que cualquier
-    fecha en orden ascendente, así que ya deja los NULL al principio y, a
-    continuación, los vencidos por antigüedad de más antiguo a más reciente
-    - exactamente el orden de prioridad pedido, sin necesitar un CASE aparte.
+    Los NULL van primero (son los más urgentes: nunca se confirmó su estado)
+    y entre ellos no hay un orden natural adicional, así que ORDER BY ... ASC
+    alcanza: SQLite ordena NULL antes que cualquier fecha en orden
+    ascendente, así que ya deja los NULL al principio y, a continuación, los
+    vencidos por antigüedad de más antiguo a más reciente (activos y
+    pausados mezclados en un solo orden) - exactamente el orden de
+    prioridad pedido, sin necesitar un CASE aparte.
+
+    Se trae también `estado_publicacion` (el estado ANTES de este
+    re-chequeo): `visitar_aviso` lo necesita para saber si el estado
+    realmente cambió, en vez de asumir que todo lo que no queda 'activo' es
+    un cambio (un pausado que sigue pausado no es un cambio).
     """
     fecha_limite = (date.today() - timedelta(days=dias_min)).isoformat()
     pendientes = pd.read_sql_query("""
-        SELECT id_aviso, url, comuna, tipo_propiedad, fecha_ultimo_chequeo_estado
+        SELECT id_aviso, url, comuna, tipo_propiedad, fecha_ultimo_chequeo_estado, estado_publicacion
         FROM avisos
-        WHERE estado_publicacion = 'activo'
+        WHERE estado_publicacion IN ('activo', 'pausado')
           AND (fecha_ultimo_chequeo_estado IS NULL OR fecha_ultimo_chequeo_estado <= ?)
         ORDER BY fecha_ultimo_chequeo_estado ASC
         LIMIT ?
@@ -419,8 +434,11 @@ def tiempo_restante_cooldown(con) -> timedelta:
 # ------------------------------------------------------------------
 def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
     """
-    Devuelve: 'ok', 'cambio_estado' (solo relevante en re-chequeo),
-    'no_disponible', 'captcha' o 'error'.
+    Devuelve: 'ok', 'cambio_estado' (solo relevante en re-chequeo: el
+    estado_publicacion resultante es distinto al que tenía `fila` ANTES de
+    esta visita - ej. activo->pausado, pausado->activo, activo->finalizado -
+    no simplemente "no quedó activo", porque un pausado que sigue pausado no
+    es un cambio), 'no_disponible', 'captcha' o 'error'.
 
     Usa la ruta principal (requests) de 01_obtener_datos/02_scraper_detalle.py
     vía `sd.obtener_detalle_aviso`, que ya incluye reintento ante fallos
@@ -479,7 +497,7 @@ def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
 
     time.sleep(random.uniform(sd.DELAY_MIN, sd.DELAY_MAX))
 
-    if es_rechequeo and estado_publicacion != "activo":
+    if es_rechequeo and estado_publicacion != fila["estado_publicacion"]:
         return "cambio_estado"
     return "ok"
 
@@ -502,7 +520,7 @@ def scrapear_detalle_incremental(con) -> dict:
     pendientes_rechequeo = obtener_pendientes_rechequeo(con)
 
     log.info(f"{len(pendientes_nuevos)} avisos nuevos pendientes de detalle. "
-              f"{len(pendientes_rechequeo)} avisos activos pendientes de re-chequeo.")
+              f"{len(pendientes_rechequeo)} avisos activos/pausados pendientes de re-chequeo.")
 
     if pendientes_nuevos.empty and pendientes_rechequeo.empty:
         log.info("Nada que hacer en esta corrida.")
@@ -540,8 +558,8 @@ def scrapear_detalle_incremental(con) -> dict:
             if resultado == "no_disponible":
                 # Para el propósito de este resumen, un re-chequeo que detecta
                 # que el aviso ya no existe cuenta como procesado Y como
-                # cambio de estado (pasó de 'activo' a 'no_disponible'), igual
-                # que 'cambio_estado' arriba.
+                # cambio de estado (pasó de 'activo' o 'pausado' a
+                # 'no_disponible'), igual que 'cambio_estado' arriba.
                 rechequeos_procesados += 1
                 cambios_estado += 1
                 no_disponibles_detectados += 1

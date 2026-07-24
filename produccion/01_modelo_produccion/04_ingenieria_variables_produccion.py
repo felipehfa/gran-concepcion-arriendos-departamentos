@@ -267,6 +267,29 @@ def imputar_superficies(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def persistir_superficies_imputadas(con_produccion, df: pd.DataFrame) -> None:
+    """Escribe de vuelta en `avisos_detalle` el superficie_util_m2/
+    superficie_total_m2 YA IMPUTADO (ver `imputar_superficies`, arriba).
+
+    Sin esto, el valor corregido que efectivamente vio el modelo al predecir
+    solo vivía en memoria durante esta corrida: la fila de `avisos_detalle`
+    se quedaba con el dato crudo para siempre (a veces claramente corrupto,
+    ej. superficie_util_m2=1), y cualquier consumidor downstream que lea esa
+    columna directo de la BD (el buscador, la pestaña de estadísticas
+    diarias) veía un valor distinto al que realmente se usó para predecir.
+
+    Para las filas que NO necesitaron imputación esto es un no-op (el valor
+    ya es el mismo que estaba), así que es seguro llamarlo sobre TODO `df`,
+    no solo sobre las filas imputadas.
+    """
+    con_produccion.executemany("""
+        UPDATE avisos_detalle
+        SET superficie_util_m2 = ?, superficie_total_m2 = ?
+        WHERE id_aviso = ?
+    """, list(df[["superficie_util_m2", "superficie_total_m2", "id_aviso"]].itertuples(index=False, name=None)))
+    con_produccion.commit()
+
+
 # ------------------------------------------------------------------
 # Normalización de las columnas nuevas (features que se sumaron a las 20
 # originales) — mismo patrón que `preprocesar_variables_amenities` y
@@ -333,6 +356,7 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
     referencia = Referencia(referencia_df)
 
     pendientes = imputar_superficies(pendientes)
+    persistir_superficies_imputadas(con_produccion, pendientes)
     pendientes["ratio_total_util"] = (
         pendientes["superficie_total_m2"] / pendientes["superficie_util_m2"].replace(0, np.nan)
     )

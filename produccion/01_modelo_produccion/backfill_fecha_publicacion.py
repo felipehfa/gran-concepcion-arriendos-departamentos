@@ -37,7 +37,7 @@ def main():
         return
 
     pendientes = con.execute("""
-        SELECT a.id_aviso, a.url, a.comuna, a.tipo_propiedad
+        SELECT a.id_aviso, a.url, a.comuna, a.tipo_propiedad, a.estado_publicacion
         FROM avisos_detalle d
         JOIN avisos a ON a.id_aviso = d.id_aviso
         WHERE d.fecha_publicacion_texto IS NULL
@@ -48,9 +48,12 @@ def main():
 
     contadores = {"ok": 0, "cambio_estado": 0, "error": 0, "captcha": 0}
 
-    for i, (id_aviso, url, comuna, tipo_propiedad) in enumerate(pendientes):
+    for i, (id_aviso, url, comuna, tipo_propiedad, estado_publicacion) in enumerate(pendientes):
         log.info(f"[{i+1}/{len(pendientes)}] {id_aviso}")
-        fila = {"id_aviso": id_aviso, "url": url, "comuna": comuna, "tipo_propiedad": tipo_propiedad}
+        fila = {
+            "id_aviso": id_aviso, "url": url, "comuna": comuna, "tipo_propiedad": tipo_propiedad,
+            "estado_publicacion": estado_publicacion,
+        }
         resultado = sdi.visitar_aviso(con, fila, es_rechequeo=True)
         contadores[resultado] = contadores.get(resultado, 0) + 1
 

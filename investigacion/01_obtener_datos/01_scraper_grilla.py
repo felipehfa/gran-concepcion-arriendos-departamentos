@@ -72,10 +72,18 @@ SELECTORES = {
     "tarjeta": ["div.ui-search-result__wrapper", "div.andes-card", "li.ui-search-layout__item"],
     "titulo": ["h2.ui-search-item__title", "h3.poly-component__title", "a.poly-component__title"],
     "link": ["a.ui-search-link", "a.poly-component__title"],
-    "precio": ["span.andes-money-amount__fraction"],
-    "moneda": ["span.andes-money-amount__currency-symbol"],
     "ubicacion": ["span.ui-search-item__location", "span.poly-component__location"],
 }
+
+# precio/moneda se buscan DENTRO del widget de precio vigente (ver
+# `_widget_precio_vigente`), no como selectores sueltos sobre toda la
+# tarjeta: un aviso con rebaja de precio (price_drop) trae DOS widgets
+# `.andes-money-amount` (el "Antes" tachado y el "Ahora" vigente), cada uno
+# con su propio par fracción+símbolo de moneda. Buscar `precio` y `moneda`
+# cada uno por separado con el primer match de la tarjeta completa podía
+# terminar emparejando el número de un widget con la moneda del otro.
+SELECTOR_FRACCION = "span.andes-money-amount__fraction"
+SELECTOR_MONEDA = "span.andes-money-amount__currency-symbol"
 
 # Regex para dormitorios / baños / m2. Se aplican sobre el TEXTO COMPLETO de la
 # tarjeta en vez de depender de una clase CSS específica para la lista de
@@ -155,6 +163,34 @@ def extraer_atributo_texto(tag, selector_list) -> Optional[str]:
     return None
 
 
+def _widget_precio_vigente(tarjeta):
+    """
+    Devuelve el elemento `.andes-money-amount` del precio VIGENTE (el que el
+    arrendador está cobrando ahora), no el precio anterior tachado que
+    Portal Inmobiliario muestra en avisos con rebaja (price_drop) — ese va
+    en un `<s class="... poly-price__previous andes-money-amount--previous">`
+    aparte del `<span class="... poly-price__amount ...">` del precio actual.
+
+    precio y moneda se extraen DESPUÉS, ambos desde este mismo widget (ver
+    `parsear_pagina`), para que nunca puedan salir de dos widgets distintos.
+    """
+    vigente = tarjeta.select_one(".andes-money-amount.poly-price__amount")
+    if vigente:
+        return vigente
+
+    # Respaldo si el sitio no trae esa clase: cualquier widget que NO sea el
+    # "antes" tachado.
+    candidatos = [
+        w for w in tarjeta.select(".andes-money-amount")
+        if "andes-money-amount--previous" not in (w.get("class") or [])
+    ]
+    if candidatos:
+        return candidatos[0]
+
+    # Último respaldo: el primer widget que haya, sea cual sea.
+    return tarjeta.select_one(".andes-money-amount")
+
+
 def parsear_atributos_regex(tarjeta) -> dict:
     """
     Extrae dormitorios / baños / m2 buscando el patrón de texto directamente
@@ -192,8 +228,11 @@ def parsear_pagina(html: str, comuna: str, tipo_propiedad: str) -> list:
     avisos = []
     for tarjeta in tarjetas:
         titulo = extraer_atributo_texto(tarjeta, SELECTORES["titulo"])
-        precio = extraer_atributo_texto(tarjeta, SELECTORES["precio"])
-        moneda = extraer_atributo_texto(tarjeta, SELECTORES["moneda"])
+
+        widget_precio = _widget_precio_vigente(tarjeta)
+        precio = extraer_atributo_texto(widget_precio, [SELECTOR_FRACCION]) if widget_precio else None
+        moneda = extraer_atributo_texto(widget_precio, [SELECTOR_MONEDA]) if widget_precio else None
+
         ubicacion = extraer_atributo_texto(tarjeta, SELECTORES["ubicacion"])
 
         link_tag = _first_match(tarjeta, SELECTORES["link"])

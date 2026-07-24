@@ -110,12 +110,14 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
     return _apply_filters(df)
 
 
-def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
+def apply_atributo_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """Filtros de atributo (precio, comuna, dormitorios, etc.), SIN el filtro
+    de estado_publicacion/incluir_pausados. La pestaña de estadísticas
+    diarias (historial.py) reutiliza esto: necesita ver avisos en cualquier
+    estado (activo/pausado/finalizado/no_disponible) para poder calcular
+    entradas y salidas día a día, filtradas igual que el buscador."""
     s = st.session_state
     out = df.copy()
-
-    if not s["f_incluir_pausados"]:
-        out = out[out["estado_publicacion"] == "activo"]
 
     price_min, price_max = s["f_price"]
     out = out[out["precio"].between(price_min, price_max)]
@@ -148,4 +150,11 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         if s[f"f_amenity_{col}"]:
             out = out[out[col]]
 
+    return out
+
+
+def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
+    out = apply_atributo_filters(df)
+    if not st.session_state["f_incluir_pausados"]:
+        out = out[out["estado_publicacion"] == "activo"]
     return out
