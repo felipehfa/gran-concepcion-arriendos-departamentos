@@ -10,6 +10,7 @@ venv/
 .vscode/
 
 # Claude
+CLAUDE.md
 .claude/
 
 # Datos grandes
@@ -29,4 +30,8 @@ produccion/01_modelo_produccion/produccion_gran_concepcion.db
 
 # EDA inicial de los datos
 investigacion/02_analisis_exploratorio/01_EDA.ipynb
+
+# graphify: grafo de conocimiento generado (graphify-out/graph.json, graph.html,
+# GRAPH_REPORT.md) - regenerable con `graphify update .`, no hace falta versionarlo
+graphify-out/
 
