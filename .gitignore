@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.streamlit/secrets.toml
 
 # VS Code
 .vscode/
@@ -21,6 +22,10 @@ investigacion/01_obtener_datos/datos_vulnerabilidad/
 # Backups puntuales de bases de datos (ej. antes de una migración de esquema
 # o un backfill) - pesados y de un solo uso, no deben versionarse
 *.bak-*
+
+# Base de datos de producción: vive en Supabase desde la migración a Postgres,
+# ya no se versiona un archivo .db en el repo (ver produccion/01_modelo_produccion/db.py)
+produccion/01_modelo_produccion/produccion_gran_concepcion.db
 
 # EDA inicial de los datos
 investigacion/02_analisis_exploratorio/01_EDA.ipynb

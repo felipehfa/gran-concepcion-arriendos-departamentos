@@ -17,6 +17,8 @@ no cada corrida individual.
 import logging
 from datetime import date
 
+from psycopg2.extras import execute_values
+
 log = logging.getLogger(__name__)
 
 
@@ -24,10 +26,15 @@ def guardar_snapshot(con_produccion, fecha: str, filas: list[tuple[str, str]]) -
     """`filas` es una lista de (id_aviso, estado_publicacion). Usado tanto por
     `capturar_snapshot_diario` (estado en vivo) como por
     `backfill_historial_diario.py` (estado leído de un commit histórico de la
-    BD vía git)."""
-    con_produccion.executemany("""
+    BD vía git).
+
+    execute_values (no executemany): son ~2400 avisos por corrida, y
+    executemany hace un round-trip de red por fila contra el pooler de
+    Supabase (varios minutos en la práctica) - execute_values manda todas
+    las filas en un solo INSERT multi-valor."""
+    execute_values(con_produccion.cursor(), """
         INSERT INTO historial_diario_avisos (fecha, id_aviso, estado_publicacion)
-        VALUES (?, ?, ?)
+        VALUES %s
         ON CONFLICT (fecha, id_aviso) DO UPDATE SET estado_publicacion = excluded.estado_publicacion
     """, [(fecha, id_aviso, estado) for id_aviso, estado in filas])
     con_produccion.commit()
@@ -36,11 +43,13 @@ def guardar_snapshot(con_produccion, fecha: str, filas: list[tuple[str, str]]) -
 def capturar_snapshot_diario(con_produccion, fecha: str | None = None) -> dict:
     fecha = fecha or date.today().isoformat()
 
-    filas = con_produccion.execute("""
+    cur = con_produccion.cursor()
+    cur.execute("""
         SELECT id_aviso, estado_publicacion
         FROM avisos
         WHERE tipo_propiedad = 'departamento' AND operacion = 'arriendo'
-    """).fetchall()
+    """)
+    filas = cur.fetchall()
 
     guardar_snapshot(con_produccion, fecha, filas)
 

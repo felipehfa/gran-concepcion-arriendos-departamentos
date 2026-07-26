@@ -87,9 +87,9 @@ class HandlerLogsEjecucion(logging.Handler):
             nivel = record.levelname.lower()
             if nivel not in ("info", "warning", "error"):
                 nivel = "info"
-            self.con.execute("""
+            self.con.cursor().execute("""
                 INSERT INTO logs_ejecucion (id_corrida, timestamp, etapa, nivel, mensaje)
-                VALUES (?, datetime('now'), ?, ?, ?)
+                VALUES (%s, to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), %s, %s, %s)
             """, (self.id_corrida_holder.valor, etapa_actual.valor, nivel, self.format(record)))
             self.con.commit()
         except Exception:
@@ -118,26 +118,32 @@ def configurar_logging(con_produccion, id_corrida_holder) -> None:
 # Tabla `corridas`
 # ------------------------------------------------------------------
 def crear_corrida(con) -> int:
-    cur = con.execute("INSERT INTO corridas (fecha_inicio, resultado) VALUES (datetime('now'), 'parcial')")
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO corridas (fecha_inicio, resultado) "
+        "VALUES (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), 'parcial') "
+        "RETURNING id_corrida"
+    )
+    id_corrida = cur.fetchone()[0]
     con.commit()
-    return cur.lastrowid
+    return id_corrida
 
 
 def actualizar_corrida(con, id_corrida: int, r: dict) -> None:
-    con.execute("""
+    con.cursor().execute("""
         UPDATE corridas SET
-            fecha_fin = datetime('now'),
-            resultado = ?,
-            version_modelo_usada = ?,
-            avisos_nuevos_grilla = ?,
-            avisos_nuevos_detalle = ?,
-            avisos_rechequeados = ?,
-            avisos_cambio_estado = ?,
-            paginas_recorridas_grilla = ?,
-            motivo_corte_grilla = ?,
-            etapa_fallida = ?,
-            mensaje_error = ?
-        WHERE id_corrida = ?
+            fecha_fin = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+            resultado = %s,
+            version_modelo_usada = %s,
+            avisos_nuevos_grilla = %s,
+            avisos_nuevos_detalle = %s,
+            avisos_rechequeados = %s,
+            avisos_cambio_estado = %s,
+            paginas_recorridas_grilla = %s,
+            motivo_corte_grilla = %s,
+            etapa_fallida = %s,
+            mensaje_error = %s
+        WHERE id_corrida = %s
     """, (
         r["resultado"], r["version_modelo_usada"],
         r["avisos_nuevos_grilla"], r["avisos_nuevos_detalle"],
@@ -157,12 +163,14 @@ def chequeo_sanidad_grilla(con, n_corridas: int = N_CORRIDAS_CONSECUTIVAS_SIN_NU
     vez de simple falta de contenido nuevo. Las corridas con resultado
     'error' se excluyen (esas ya son ruidosas por su cuenta).
     """
-    filas = con.execute("""
+    cur = con.cursor()
+    cur.execute("""
         SELECT avisos_nuevos_grilla FROM corridas
         WHERE resultado IN ('ok', 'parcial')
         ORDER BY id_corrida DESC
-        LIMIT ?
-    """, (n_corridas,)).fetchall()
+        LIMIT %s
+    """, (n_corridas,))
+    filas = cur.fetchall()
 
     if len(filas) < n_corridas:
         return
@@ -288,7 +296,6 @@ if __name__ == "__main__":
         # Process no cero: para que GitHub Actions marque el job (y por lo
         # tanto la corrida programada) como fallido y avise, en vez de un
         # check verde silencioso mientras el detalle del fallo solo queda
-        # en la tabla `corridas`/`logs_ejecucion`. El commit/push de la BD
-        # sigue corriendo igual (el workflow lo marca con `if: always()`),
-        # así el diagnóstico llega al repo aunque el job termine en rojo.
+        # en la tabla `corridas`/`logs_ejecucion` (ya persistida en Supabase
+        # en ese punto, no depende de ningún paso posterior del workflow).
         sys.exit(1)

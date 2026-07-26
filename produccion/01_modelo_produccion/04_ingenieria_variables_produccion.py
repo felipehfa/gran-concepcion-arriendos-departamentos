@@ -30,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from psycopg2.extras import execute_values
 from sklearn.neighbors import BallTree
 
 import db
@@ -282,10 +283,15 @@ def persistir_superficies_imputadas(con_produccion, df: pd.DataFrame) -> None:
     ya es el mismo que estaba), así que es seguro llamarlo sobre TODO `df`,
     no solo sobre las filas imputadas.
     """
-    con_produccion.executemany("""
-        UPDATE avisos_detalle
-        SET superficie_util_m2 = ?, superficie_total_m2 = ?
-        WHERE id_aviso = ?
+    # execute_values (no executemany): un UPDATE ... FROM (VALUES %s) en un
+    # solo viaje de red contra el pooler de Supabase, en vez de un round-trip
+    # por fila.
+    execute_values(con_produccion.cursor(), """
+        UPDATE avisos_detalle AS a
+        SET superficie_util_m2 = datos.superficie_util_m2,
+            superficie_total_m2 = datos.superficie_total_m2
+        FROM (VALUES %s) AS datos(superficie_util_m2, superficie_total_m2, id_aviso)
+        WHERE a.id_aviso = datos.id_aviso
     """, list(df[["superficie_util_m2", "superficie_total_m2", "id_aviso"]].itertuples(index=False, name=None)))
     con_produccion.commit()
 

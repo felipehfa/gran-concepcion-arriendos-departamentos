@@ -92,7 +92,60 @@ python investigacion/01_obtener_datos/03_vulnerabilidad_socioterritorial.py
 
 ---
 
-## 3. Dashboard (`produccion/03_visualizacion/`)
+## 3. Base de datos de producción (Supabase/Postgres)
+
+Desde el 2026-07-26 la base de producción vive en Supabase (Postgres), no en un archivo `.db`
+versionado — ver [README, sección 9.4](README.md#94-base-de-datos-por-qué-supabase-y-no-un-db-versionado).
+Tanto el pipeline de `produccion/01_modelo_produccion/` como el dashboard leen el connection
+string desde la variable de entorno `BD_STRING`:
+
+```
+BD_STRING = postgresql://postgres.<project-ref>:<password>@aws-0-<región>.pooler.supabase.com:6543/postgres
+```
+
+Usá el connection string del **connection pooler, modo Transaction** (Project Settings → Database
+en el dashboard de Supabase) — no el de conexión directa: los runners de GitHub Actions no tienen
+salida IPv6 confiable, y la conexión directa de Supabase resuelve solo por IPv6.
+
+**Dos roles distintos, principio de mínimo privilegio** (el orquestador escribe, el dashboard casi
+no):
+
+| Rol | Usado por | Privilegios |
+|---|---|---|
+| `postgres` | Orquestador (GitHub Actions) | Acceso completo (dueño del schema) |
+| `streamlit_app` | Dashboard (Streamlit Cloud) | `SELECT` en todo el schema `public` + `INSERT`/`UPDATE` solo en `valores_uf` (la única escritura que hace el dashboard, vía la caché de UF) |
+
+`streamlit_app` se creó a mano una vez contra Supabase (fuera de `db.py`, que solo gestiona
+tablas, no roles):
+
+```sql
+CREATE ROLE streamlit_app LOGIN PASSWORD '<password-fuerte>';
+GRANT CONNECT ON DATABASE postgres TO streamlit_app;
+GRANT USAGE ON SCHEMA public TO streamlit_app;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO streamlit_app;
+GRANT INSERT, UPDATE ON valores_uf TO streamlit_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO streamlit_app;
+```
+
+Configuración por entorno:
+
+- **Local**: creá un archivo `.env` en la raíz del repo con `BD_STRING` (rol `postgres` — ya está
+  en `.gitignore`, nunca se commitea). Para probar el dashboard localmente con el rol restringido,
+  usá el connection string de `streamlit_app` en su lugar.
+- **GitHub Actions** (orquestador): repository secret `BD_STRING` con el connection string del rol
+  `postgres`, en Settings → Secrets and variables → Actions.
+- **Streamlit Cloud** (dashboard): Settings → Secrets de la app, en formato TOML
+  (`BD_STRING = "postgresql://streamlit_app.<project-ref>:..."`, con comillas) — el connection
+  string del rol `streamlit_app`, **no** el de `postgres`.
+
+El schema **no requiere ningún paso manual**: `db.py` corre `CREATE TABLE IF NOT EXISTS` para las
+8 tablas en cada conexión (`conectar_produccion()`), así que apuntar `BD_STRING` a un proyecto
+Supabase vacío y correr el pipeline una vez ya lo deja listo — no hay un `.sql` aparte que
+mantener sincronizado a mano.
+
+---
+
+## 4. Dashboard (`produccion/03_visualizacion/`)
 
 ```bash
 pip install -r produccion/03_visualizacion/requirements.txt
@@ -100,14 +153,14 @@ cd produccion/03_visualizacion
 streamlit run app.py
 ```
 
-`requirements.txt` incluye, además de `streamlit`/`folium`/`streamlit-folium`/`pandas`,
+`requirements.txt` incluye, además de `streamlit`/`folium`/`streamlit-folium`/`pandas`/`psycopg2-binary`,
 `numpy`/`requests`/`joblib`/`scikit-learn`: son transitivas de
 `investigacion/03_ingenieria_variables/01_ingenieria_variables.py`, que `data.py` importa
 dinámicamente — sin ellas el deploy falla con `ModuleNotFoundError` al cargar ese módulo
 (Streamlit Cloud solo instala lo declarado en este `requirements.txt`, no las dependencias de las
 demás etapas del pipeline).
 
-Requiere que `produccion/01_modelo_produccion/produccion_gran_concepcion.db` ya exista con al
-menos un aviso en `predicciones` (ver [README, sección 9](README.md#9-pipeline-de-producción-produccion01_modelo_produccion))
+Requiere `BD_STRING` configurado (sección 3) y que la base ya tenga al menos un aviso en
+`predicciones` (ver [README, sección 9](README.md#9-pipeline-de-producción-produccion01_modelo_produccion))
 — si la base está vacía o el orquestador todavía no corrió la etapa de predicción, el dashboard
 muestra un aviso de "sin datos" en vez de una tabla vacía silenciosa.

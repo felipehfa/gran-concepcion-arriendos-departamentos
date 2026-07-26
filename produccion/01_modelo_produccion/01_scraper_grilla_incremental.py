@@ -94,7 +94,8 @@ def obtener_ids_originales(con_original) -> set:
 
 
 def obtener_ids_produccion(con_produccion) -> set:
-    cur = con_produccion.execute("SELECT id_aviso FROM avisos")
+    cur = con_produccion.cursor()
+    cur.execute("SELECT id_aviso FROM avisos")
     return {fila[0] for fila in cur.fetchall()}
 
 
@@ -114,11 +115,12 @@ def guardar_pagina_en_produccion(avisos: list, con_produccion, ids_conocidos: se
             continue
 
         cur.execute("""
-            INSERT OR IGNORE INTO avisos (
+            INSERT INTO avisos (
                 id_aviso, comuna, tipo_propiedad, operacion, titulo, precio,
                 moneda, ubicacion, dormitorios, banos, superficie_m2, url,
                 first_seen, estado_publicacion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'activo')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'activo')
+            ON CONFLICT (id_aviso) DO NOTHING
         """, (
             aviso.id_aviso, aviso.comuna, aviso.tipo_propiedad, aviso.operacion,
             aviso.titulo, sg.limpiar_precio(aviso.precio), aviso.moneda, aviso.ubicacion,

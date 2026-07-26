@@ -1,43 +1,28 @@
 """
-Esquema y conexión de la base de datos de PRODUCCIÓN
-(produccion/01_modelo_produccion/produccion_gran_concepcion.db).
+Esquema y conexión de la base de datos de PRODUCCIÓN (Supabase / Postgres).
 
 Este módulo NO scrapea ni calcula nada — solo define las tablas y ofrece
 helpers de conexión, para que el resto de los scripts de produccion/01_modelo_produccion/
 lo importen (`from db import ...`).
 
-Tablas:
-  - avisos           : nivel grilla (igual que la tabla `avisos` original,
-                        + estado_publicacion / fecha_ultimo_chequeo_estado)
-  - avisos_detalle   : nivel detalle, 1:1 con `avisos` (igual que la tabla
-                        `avisos_detalle` original, + columnas de
-                        vulnerabilidad IGVUST resueltas directo, sin las
-                        tablas `vulnerabilidad_uv`/`avisos_igvust` separadas
-                        que usa la base de datos original)
-  - poligonos_vulnerabilidad_uv : polígonos de Unidad Vecinal (IGVUST) de las
-                        10 comunas analizadas, precalculados UNA VEZ desde el
-                        shapefile (ver migrar_poligonos_vulnerabilidad.py) y
-                        guardados como WKT en EPSG:4326 — así
-                        03_vulnerabilidad_produccion.py no depende del
-                        shapefile (no versionado en el repo) ni de geopandas
-                        en cada corrida de producción.
-  - predicciones     : una fila por (id_aviso, version_modelo)
-  - corridas         : metadatos de cada corrida del orquestador
-  - logs_ejecucion   : log persistente de cada etapa, por corrida
-  - control          : clave/valor genérico para estado interno de los
-                        scripts (ej. cooldown tras CAPTCHA del scraper de
-                        detalle) — equivalente a la tabla `estado` de la
-                        base de datos original, pero propia de producción
+La conexión se arma desde la variable de entorno BD_STRING (connection string
+del connection pooler de Supabase, modo transaction - ver .env).
+
+Tablas (ver inicializar_bd_produccion más abajo para el detalle de columnas):
+avisos, avisos_detalle, poligonos_vulnerabilidad_uv, predicciones, corridas,
+logs_ejecucion, historial_diario_avisos, control.
 """
 
+import os
 import sqlite3
 from pathlib import Path
+
+import psycopg2
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
 
-RUTA_BD_PRODUCCION = SCRIPT_DIR / "produccion_gran_concepcion.db"
 RUTA_BD_ORIGINAL = INVESTIGACION_ROOT / "01_obtener_datos" / "avisos_gran_concepcion.db"
 
 # Mismas subcategorías de punto de interés que `SUBCATEGORIAS_POI.values()`
@@ -65,243 +50,22 @@ SUBCATEGORIAS_POI_COLUMNAS = [
 # ------------------------------------------------------------------
 # Conexión
 # ------------------------------------------------------------------
-def conectar_produccion(ruta_bd: Path = RUTA_BD_PRODUCCION) -> sqlite3.Connection:
-    """Abre (o crea) la base de datos de producción, con foreign_keys ON,
-    y se asegura de que las tablas existan."""
-    con = sqlite3.connect(ruta_bd)
-    con.execute("PRAGMA foreign_keys = ON")
-    _migrar_esquema_avisos(con)
+def conectar_produccion() -> psycopg2.extensions.connection:
+    """Abre la conexión a la base de datos de producción (Supabase) y se
+    asegura de que las tablas existan."""
+    # sslmode='require' explícito: sin esto psycopg2 usa 'prefer' por
+    # default, que se degrada en silencio a texto plano si la negociación
+    # TLS llega a fallar por algún motivo, en vez de cortar la conexión.
+    con = psycopg2.connect(os.environ["BD_STRING"], sslmode="require")
     inicializar_bd_produccion(con)
-    _migrar_esquema_poligonos_vulnerabilidad(con)
-    _migrar_esquema_avisos_detalle(con)
-    _migrar_esquema_predicciones(con)
-    _migrar_esquema_logs_ejecucion(con)
     return con
 
 
-# ------------------------------------------------------------------
-# Migración de `avisos` sobre una base de datos YA existente (con datos)
-# ------------------------------------------------------------------
-def _migrar_esquema_avisos(con: sqlite3.Connection) -> None:
-    """
-    Migración idempotente, pensada para correr en cada conexión sin que haga
-    falta un paso manual aparte:
-      1. Si la tabla `avisos` todavía no existe, no hace nada - la
-         CREATE TABLE IF NOT EXISTS de inicializar_bd_produccion() más abajo
-         ya trae el esquema final completo (columna + estado incluidos).
-      2. Si existe pero le falta la columna `intentos_fallidos_detalle`
-         (contador de fallos de scraping consecutivos, ver
-         02_scraper_detalle_incremental.py), la agrega con
-         ALTER TABLE ... ADD COLUMN - operación segura e inmediata en
-         SQLite, no reescribe filas y aplica el DEFAULT a las ya existentes.
-      3. Si el CHECK de `estado_publicacion` todavía no incluye
-         'no_disponible' (estado nuevo para avisos que superaron el umbral
-         de fallos persistentes, distinto de 'finalizado' = arriendo
-         terminado con normalidad), reconstruye la tabla completa: SQLite no
-         permite modificar un CHECK con ALTER TABLE, así que se crea
-         `avisos_nuevo` con el esquema final, se copian todas las filas tal
-         cual, y se reemplaza la tabla vieja - todo dentro de una
-         transacción con foreign_keys desactivadas (procedimiento
-         recomendado por SQLite para reconstrucciones de tabla), con
-         rollback si algo falla a mitad de camino.
-    """
-    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(avisos)").fetchall()}
-    if not columnas:
-        return
-
-    if "intentos_fallidos_detalle" not in columnas:
-        con.execute("ALTER TABLE avisos ADD COLUMN intentos_fallidos_detalle INTEGER DEFAULT 0")
-        con.commit()
-
-    definicion_actual = con.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='avisos'"
-    ).fetchone()[0]
-    if "no_disponible" in definicion_actual:
-        return
-
-    filas_antes = con.execute("SELECT COUNT(*) FROM avisos").fetchone()[0]
-
-    con.execute("PRAGMA foreign_keys = OFF")
-    try:
-        con.execute("BEGIN")
-        con.execute("""
-            CREATE TABLE avisos_nuevo (
-                id_aviso                    TEXT PRIMARY KEY,
-                comuna                      TEXT NOT NULL,
-                tipo_propiedad              TEXT NOT NULL,
-                operacion                   TEXT NOT NULL,
-                titulo                      TEXT,
-                precio                      REAL,
-                moneda                      TEXT,
-                ubicacion                   TEXT,
-                dormitorios                 INTEGER,
-                banos                       INTEGER,
-                superficie_m2               REAL,
-                url                         TEXT,
-                first_seen                  TEXT,
-                estado_publicacion          TEXT NOT NULL DEFAULT 'activo'
-                                             CHECK(estado_publicacion IN
-                                                   ('activo', 'pausado', 'finalizado', 'no_disponible')),
-                fecha_ultimo_chequeo_estado TEXT,
-                intentos_fallidos_detalle   INTEGER DEFAULT 0
-            )
-        """)
-        con.execute("INSERT INTO avisos_nuevo SELECT * FROM avisos")
-        con.execute("DROP TABLE avisos")
-        con.execute("ALTER TABLE avisos_nuevo RENAME TO avisos")
-        con.execute("COMMIT")
-    except Exception:
-        con.execute("ROLLBACK")
-        raise
-    finally:
-        con.execute("PRAGMA foreign_keys = ON")
-
-    filas_despues = con.execute("SELECT COUNT(*) FROM avisos").fetchone()[0]
-    if filas_despues != filas_antes:
-        raise RuntimeError(
-            f"Migración de `avisos` perdió filas: antes={filas_antes}, después={filas_despues}. "
-            f"Revisa manualmente antes de seguir."
-        )
-
-
-# ------------------------------------------------------------------
-# Migración de `avisos_detalle` sobre una base de datos YA existente
-# ------------------------------------------------------------------
-def _migrar_esquema_avisos_detalle(con: sqlite3.Connection) -> None:
-    """
-    Se llama DESPUÉS de inicializar_bd_produccion() (que ya garantiza que la
-    tabla exista con el esquema completo vía CREATE TABLE IF NOT EXISTS).
-    Si la tabla ya existía de antes (con datos) y le falta una columna nueva
-    del esquema actual (ej. c_ig_com, agregada junto con uv_rsh/rank_nac/
-    pob_rsh_uv/p_urbano en las features de vulnerabilidad), la agrega con
-    ALTER TABLE ... ADD COLUMN - operación segura e inmediata en SQLite, no
-    reescribe filas existentes (quedan con NULL en la columna nueva, listas
-    para que 03_vulnerabilidad_produccion.py las resuelva en su próxima
-    corrida, igual que cualquier aviso con uv_rsh todavía sin resolver).
-    """
-    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(avisos_detalle)").fetchall()}
-    if not columnas:
-        return
-
-    if "c_ig_com" not in columnas:
-        con.execute("ALTER TABLE avisos_detalle ADD COLUMN c_ig_com REAL")
-        con.commit()
-
-    if "fecha_publicacion_precision" not in columnas:
-        con.execute("ALTER TABLE avisos_detalle ADD COLUMN fecha_publicacion_precision TEXT")
-        con.commit()
-
-    if "hog_uv" not in columnas:
-        # Solo agrega la columna (queda NULL en filas existentes) - a
-        # diferencia de c_ig_com, acá el backfill de avisos YA resueltos
-        # (uv_rsh IS NOT NULL) no lo hace 03_vulnerabilidad_produccion.py en
-        # su próxima corrida (esa etapa solo mira uv_rsh IS NULL), así que
-        # requiere un backfill puntual aparte (ver backfill_hog_uv.py) que
-        # además necesita que poligonos_vulnerabilidad_uv.hog_uv ya esté
-        # poblada (ver _migrar_esquema_poligonos_vulnerabilidad).
-        con.execute("ALTER TABLE avisos_detalle ADD COLUMN hog_uv REAL")
-        con.commit()
-
-
-def _migrar_esquema_poligonos_vulnerabilidad(con: sqlite3.Connection) -> None:
-    """
-    Se llama DESPUÉS de inicializar_bd_produccion(). Si la tabla ya existía
-    de antes sin la columna `hog_uv`, la agrega con ALTER TABLE ... ADD
-    COLUMN (queda NULL en las filas existentes). El backfill de datos (desde
-    la tabla `vulnerabilidad_uv` de la base ORIGINAL de investigación, por
-    `uv_rsh`) es un paso puntual aparte (ver backfill_hog_uv.py) - no
-    requiere el shapefile IGVUST, a diferencia de la carga inicial de esta
-    tabla vía migrar_poligonos_vulnerabilidad.py.
-    """
-    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(poligonos_vulnerabilidad_uv)").fetchall()}
-    if not columnas:
-        return
-
-    if "hog_uv" not in columnas:
-        con.execute("ALTER TABLE poligonos_vulnerabilidad_uv ADD COLUMN hog_uv REAL")
-        con.commit()
-
-
-def _migrar_esquema_predicciones(con: sqlite3.Connection) -> None:
-    """
-    Se llama DESPUÉS de inicializar_bd_produccion() (que ya garantiza que la
-    tabla exista con el esquema actual vía CREATE TABLE IF NOT EXISTS). Si la
-    tabla ya existía de antes con la columna vieja `precio_predicho` (el
-    modelo predecía solo el arriendo nominal), la renombra a
-    `costo_total_predicho` (el modelo ahora predice arriendo + gastos
-    comunes) con ALTER TABLE ... RENAME COLUMN - soportado desde SQLite
-    3.25, conserva los valores existentes tal cual. Esas filas antiguas
-    quedan con un valor bajo el significado VIEJO (solo arriendo) aunque la
-    columna ya se llame costo_total_predicho; conviene forzar una
-    repredicción del histórico tras desplegar el modelo nuevo en vez de
-    confiar en estos valores.
-    """
-    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(predicciones)").fetchall()}
-    if not columnas:
-        return
-
-    if "precio_predicho" in columnas and "costo_total_predicho" not in columnas:
-        con.execute("ALTER TABLE predicciones RENAME COLUMN precio_predicho TO costo_total_predicho")
-        con.commit()
-
-
-def _migrar_esquema_logs_ejecucion(con: sqlite3.Connection) -> None:
-    """
-    Igual que `_migrar_esquema_avisos`: si la tabla ya existía de antes con
-    el CHECK viejo de `etapa` (sin 'historial_diario', la nueva etapa que
-    guarda el snapshot diario de avisos), la reconstruye completa porque
-    SQLite no permite modificar un CHECK con ALTER TABLE.
-    """
-    columnas = {fila[1] for fila in con.execute("PRAGMA table_info(logs_ejecucion)").fetchall()}
-    if not columnas:
-        return
-
-    definicion_actual = con.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='logs_ejecucion'"
-    ).fetchone()[0]
-    if "historial_diario" in definicion_actual:
-        return
-
-    filas_antes = con.execute("SELECT COUNT(*) FROM logs_ejecucion").fetchone()[0]
-
-    con.execute("PRAGMA foreign_keys = OFF")
-    try:
-        con.execute("BEGIN")
-        con.execute("""
-            CREATE TABLE logs_ejecucion_nuevo (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_corrida  INTEGER REFERENCES corridas(id_corrida),
-                timestamp   TEXT NOT NULL,
-                etapa       TEXT CHECK(etapa IN
-                            ('scraper_grilla', 'scraper_detalle', 'rechequeo_estado',
-                             'vulnerabilidad', 'variables', 'prediccion', 'historial_diario',
-                             'insercion_bd', 'orquestador')),
-                nivel       TEXT CHECK(nivel IN ('info', 'warning', 'error')),
-                mensaje     TEXT NOT NULL,
-                detalle     TEXT
-            )
-        """)
-        con.execute("INSERT INTO logs_ejecucion_nuevo SELECT * FROM logs_ejecucion")
-        con.execute("DROP TABLE logs_ejecucion")
-        con.execute("ALTER TABLE logs_ejecucion_nuevo RENAME TO logs_ejecucion")
-        con.execute("COMMIT")
-    except Exception:
-        con.execute("ROLLBACK")
-        raise
-    finally:
-        con.execute("PRAGMA foreign_keys = ON")
-
-    filas_despues = con.execute("SELECT COUNT(*) FROM logs_ejecucion").fetchone()[0]
-    if filas_despues != filas_antes:
-        raise RuntimeError(
-            f"Migración de `logs_ejecucion` perdió filas: antes={filas_antes}, después={filas_despues}. "
-            f"Revisa manualmente antes de seguir."
-        )
-
-
 def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
-    """Abre la base de datos ORIGINAL en modo solo-lectura (URI mode).
-    Ningún script de produccion/01_modelo_produccion/ debe escribir en esta base."""
+    """Abre la base de datos ORIGINAL (de investigación) en modo solo-lectura
+    (URI mode). Esta base sigue siendo un archivo SQLite local, no versionado
+    en git ni parte de producción. Ningún script de produccion/01_modelo_produccion/
+    debe escribir en esta base."""
     uri = f"file:{ruta_bd.as_posix()}?mode=ro"
     return sqlite3.connect(uri, uri=True)
 
@@ -309,24 +73,26 @@ def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
 # ------------------------------------------------------------------
 # Esquema
 # ------------------------------------------------------------------
-def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
-    con.execute("""
+def inicializar_bd_produccion(con: psycopg2.extensions.connection) -> None:
+    cur = con.cursor()
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS avisos (
             id_aviso                    TEXT PRIMARY KEY,
             comuna                      TEXT NOT NULL,
             tipo_propiedad              TEXT NOT NULL,
             operacion                   TEXT NOT NULL,
             titulo                      TEXT,
-            precio                      REAL,
+            precio                      DOUBLE PRECISION,
             moneda                      TEXT,
             ubicacion                   TEXT,
             dormitorios                 INTEGER,
             banos                       INTEGER,
-            superficie_m2               REAL,
+            superficie_m2               DOUBLE PRECISION,
             url                         TEXT,
             first_seen                  TEXT,
             estado_publicacion          TEXT NOT NULL DEFAULT 'activo'
-                                         CHECK(estado_publicacion IN
+                                         CHECK (estado_publicacion IN
                                                ('activo', 'pausado', 'finalizado', 'no_disponible')),
             fecha_ultimo_chequeo_estado TEXT,
             intentos_fallidos_detalle   INTEGER DEFAULT 0
@@ -334,19 +100,19 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
     """)
 
     columnas_poi = ",\n            ".join(
-        f"cantidad_{clave} INTEGER,\n            distancia_min_m_{clave} REAL"
+        f"cantidad_{clave} INTEGER,\n            distancia_min_m_{clave} DOUBLE PRECISION"
         for clave in SUBCATEGORIAS_POI_COLUMNAS
     )
 
-    con.execute(f"""
+    cur.execute(f"""
         CREATE TABLE IF NOT EXISTS avisos_detalle (
             id_aviso                       TEXT PRIMARY KEY REFERENCES avisos(id_aviso),
             descripcion                    TEXT,
             fecha_publicacion_texto        TEXT,
             fecha_publicacion_aprox        TEXT,
             fecha_publicacion_precision    TEXT,
-            superficie_total_m2            REAL,
-            superficie_util_m2             REAL,
+            superficie_total_m2            DOUBLE PRECISION,
+            superficie_util_m2             DOUBLE PRECISION,
             dormitorios                    INTEGER,
             banos                          INTEGER,
             estacionamientos               INTEGER,
@@ -355,7 +121,7 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             admite_mascotas                INTEGER,
             condominio_cerrado             INTEGER,
             bodegas                        INTEGER,
-            gastos_comunes                 REAL,
+            gastos_comunes                 DOUBLE PRECISION,
             estacionamiento_visitas        INTEGER,
             solo_familias                  INTEGER,
             max_habitantes                 INTEGER,
@@ -366,85 +132,85 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
             piso_unidad                    INTEGER,
             deptos_por_piso                INTEGER,
             barrio                         TEXT,
-            latitud                        REAL,
-            longitud                       REAL,
-            distancia_centro_comuna_m      REAL,
-            distancia_centro_concepcion_m  REAL,
+            latitud                        DOUBLE PRECISION,
+            longitud                       DOUBLE PRECISION,
+            distancia_centro_comuna_m      DOUBLE PRECISION,
+            distancia_centro_concepcion_m  DOUBLE PRECISION,
             {columnas_poi},
             uv_rsh                         TEXT,
-            rank_nac                       REAL,
+            rank_nac                       DOUBLE PRECISION,
             pob_rsh_uv                     INTEGER,
-            p_urbano                       REAL,
-            c_ig_com                       REAL,
-            hog_uv                         REAL,
+            p_urbano                       DOUBLE PRECISION,
+            c_ig_com                       DOUBLE PRECISION,
+            hog_uv                         DOUBLE PRECISION,
             fecha_scrapeo                  TEXT
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS poligonos_vulnerabilidad_uv (
             uv_rsh         TEXT PRIMARY KEY,
             comuna         TEXT NOT NULL,
-            rank_nac       REAL,
+            rank_nac       DOUBLE PRECISION,
             pob_rsh_uv     INTEGER,
-            p_urbano       REAL,
-            c_ig_com       REAL,
-            hog_uv         REAL,
+            p_urbano       DOUBLE PRECISION,
+            c_ig_com       DOUBLE PRECISION,
+            hog_uv         DOUBLE PRECISION,
             geometria_wkt  TEXT NOT NULL
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS predicciones (
-            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             id_aviso               TEXT NOT NULL REFERENCES avisos(id_aviso),
             version_modelo         TEXT NOT NULL,
             fecha_prediccion       TEXT NOT NULL,
-            costo_total_predicho   REAL NOT NULL,
-            z_robusto              REAL,
+            costo_total_predicho   DOUBLE PRECISION NOT NULL,
+            z_robusto              DOUBLE PRECISION,
             decil_precio           INTEGER,
-            etiqueta               TEXT CHECK(etiqueta IN ('oportunidad', 'caro', 'precio_de_mercado')),
-            nivel_confianza        TEXT CHECK(nivel_confianza IN ('alta confianza', 'confianza media', 'baja confianza')),
-            cv_ensamble            REAL,
-            UNIQUE(id_aviso, version_modelo)
+            etiqueta               TEXT CHECK (etiqueta IN ('oportunidad', 'caro', 'precio_de_mercado')),
+            nivel_confianza        TEXT CHECK (nivel_confianza IN ('alta confianza', 'confianza media', 'baja confianza')),
+            cv_ensamble            DOUBLE PRECISION,
+            UNIQUE (id_aviso, version_modelo)
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS corridas (
-            id_corrida                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_corrida                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             fecha_inicio                TEXT NOT NULL,
             fecha_fin                   TEXT,
-            resultado                   TEXT CHECK(resultado IN ('ok', 'error', 'parcial')),
+            resultado                   TEXT CHECK (resultado IN ('ok', 'error', 'parcial')),
             version_modelo_usada        TEXT,
             avisos_nuevos_grilla        INTEGER DEFAULT 0,
             avisos_nuevos_detalle       INTEGER DEFAULT 0,
             avisos_rechequeados         INTEGER DEFAULT 0,
             avisos_cambio_estado        INTEGER DEFAULT 0,
             paginas_recorridas_grilla   INTEGER DEFAULT 0,
-            motivo_corte_grilla         TEXT CHECK(motivo_corte_grilla IN
+            motivo_corte_grilla         TEXT CHECK (motivo_corte_grilla IN
                                          ('paginas_vacias_consecutivas', 'limite_paginas', 'limite_tiempo')),
             etapa_fallida                TEXT,
             mensaje_error                TEXT
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS logs_ejecucion (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_corrida  INTEGER REFERENCES corridas(id_corrida),
+            id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            id_corrida  BIGINT REFERENCES corridas(id_corrida),
             timestamp   TEXT NOT NULL,
-            etapa       TEXT CHECK(etapa IN
+            etapa       TEXT CHECK (etapa IN
                         ('scraper_grilla', 'scraper_detalle', 'rechequeo_estado',
                          'vulnerabilidad', 'variables', 'prediccion', 'historial_diario',
                          'insercion_bd', 'orquestador')),
-            nivel       TEXT CHECK(nivel IN ('info', 'warning', 'error')),
+            nivel       TEXT CHECK (nivel IN ('info', 'warning', 'error')),
             mensaje     TEXT NOT NULL,
             detalle     TEXT
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS historial_diario_avisos (
             fecha               TEXT NOT NULL,
             id_aviso            TEXT NOT NULL REFERENCES avisos(id_aviso),
@@ -453,7 +219,7 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
         )
     """)
 
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS control (
             clave  TEXT PRIMARY KEY,
             valor  TEXT
@@ -469,36 +235,40 @@ def inicializar_bd_produccion(con: sqlite3.Connection) -> None:
 # 02_scraper_detalle_incremental.py para el umbral y la lógica de cuándo
 # marcar un aviso como 'no_disponible')
 # ------------------------------------------------------------------
-def incrementar_intentos_fallidos_detalle(con: sqlite3.Connection, id_aviso: str) -> int:
+def incrementar_intentos_fallidos_detalle(con: psycopg2.extensions.connection, id_aviso: str) -> int:
     """Suma 1 al contador de fallos consecutivos de este aviso y devuelve el nuevo valor."""
-    con.execute(
+    cur = con.cursor()
+    cur.execute(
         "UPDATE avisos SET intentos_fallidos_detalle = COALESCE(intentos_fallidos_detalle, 0) + 1 "
-        "WHERE id_aviso = ?",
+        "WHERE id_aviso = %s",
         (id_aviso,),
     )
     con.commit()
-    fila = con.execute("SELECT intentos_fallidos_detalle FROM avisos WHERE id_aviso = ?", (id_aviso,)).fetchone()
+    cur.execute("SELECT intentos_fallidos_detalle FROM avisos WHERE id_aviso = %s", (id_aviso,))
+    fila = cur.fetchone()
     return fila[0] if fila else 0
 
 
-def resetear_intentos_fallidos_detalle(con: sqlite3.Connection, id_aviso: str) -> None:
+def resetear_intentos_fallidos_detalle(con: psycopg2.extensions.connection, id_aviso: str) -> None:
     """Vuelve el contador a 0 - se llama cuando un aviso finalmente se scrapea con éxito."""
-    con.execute("UPDATE avisos SET intentos_fallidos_detalle = 0 WHERE id_aviso = ?", (id_aviso,))
+    con.cursor().execute("UPDATE avisos SET intentos_fallidos_detalle = 0 WHERE id_aviso = %s", (id_aviso,))
     con.commit()
 
 
 # ------------------------------------------------------------------
 # Helpers de la tabla `control` (clave/valor genérico)
 # ------------------------------------------------------------------
-def leer_control(con: sqlite3.Connection, clave: str) -> str:
-    fila = con.execute("SELECT valor FROM control WHERE clave = ?", (clave,)).fetchone()
+def leer_control(con: psycopg2.extensions.connection, clave: str) -> str:
+    cur = con.cursor()
+    cur.execute("SELECT valor FROM control WHERE clave = %s", (clave,))
+    fila = cur.fetchone()
     return fila[0] if fila else None
 
 
-def escribir_control(con: sqlite3.Connection, clave: str, valor: str) -> None:
-    con.execute(
-        "INSERT INTO control (clave, valor) VALUES (?, ?) "
-        "ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor",
+def escribir_control(con: psycopg2.extensions.connection, clave: str, valor: str) -> None:
+    con.cursor().execute(
+        "INSERT INTO control (clave, valor) VALUES (%s, %s) "
+        "ON CONFLICT (clave) DO UPDATE SET valor = excluded.valor",
         (clave, valor),
     )
     con.commit()
@@ -506,7 +276,9 @@ def escribir_control(con: sqlite3.Connection, clave: str, valor: str) -> None:
 
 if __name__ == "__main__":
     con = conectar_produccion()
-    tablas = con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
-    print(f"Base de datos de producción inicializada en: {RUTA_BD_PRODUCCION}")
+    cur = con.cursor()
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name")
+    tablas = cur.fetchall()
+    print("Base de datos de producción inicializada en Supabase.")
     print(f"Tablas: {[t[0] for t in tablas]}")
     con.close()

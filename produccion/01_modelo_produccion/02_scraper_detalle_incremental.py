@@ -333,12 +333,13 @@ def obtener_pendientes_rechequeo(
     por ser estados terminales que ya no cambian.
 
     Los NULL van primero (son los más urgentes: nunca se confirmó su estado)
-    y entre ellos no hay un orden natural adicional, así que ORDER BY ... ASC
-    alcanza: SQLite ordena NULL antes que cualquier fecha en orden
-    ascendente, así que ya deja los NULL al principio y, a continuación, los
-    vencidos por antigüedad de más antiguo a más reciente (activos y
-    pausados mezclados en un solo orden) - exactamente el orden de
-    prioridad pedido, sin necesitar un CASE aparte.
+    y entre ellos no hay un orden natural adicional. SQLite ordena NULL antes
+    que cualquier fecha en ASC por defecto, pero Postgres hace lo contrario
+    (NULLS LAST por defecto en ASC) - de ahí el NULLS FIRST explícito, para
+    preservar el mismo orden de prioridad en ambos motores sin necesitar un
+    CASE aparte: primero los nunca chequeados, y a continuación los vencidos
+    por antigüedad de más antiguo a más reciente (activos y pausados
+    mezclados en un solo orden).
 
     Se trae también `estado_publicacion` (el estado ANTES de este
     re-chequeo): `visitar_aviso` lo necesita para saber si el estado
@@ -350,9 +351,9 @@ def obtener_pendientes_rechequeo(
         SELECT id_aviso, url, comuna, tipo_propiedad, fecha_ultimo_chequeo_estado, estado_publicacion
         FROM avisos
         WHERE estado_publicacion IN ('activo', 'pausado')
-          AND (fecha_ultimo_chequeo_estado IS NULL OR fecha_ultimo_chequeo_estado <= ?)
-        ORDER BY fecha_ultimo_chequeo_estado ASC
-        LIMIT ?
+          AND (fecha_ultimo_chequeo_estado IS NULL OR fecha_ultimo_chequeo_estado <= %s)
+        ORDER BY fecha_ultimo_chequeo_estado ASC NULLS FIRST
+        LIMIT %s
     """, con, params=(fecha_limite, batch))
     return pendientes.dropna(subset=["url"])
 
@@ -391,11 +392,11 @@ def guardar_detalle_produccion(con, id_aviso: str, datos: dict) -> None:
     todas_las_columnas = ["id_aviso"] + columnas_editables
     todos_los_valores = [id_aviso] + valores_editables
 
-    placeholders = ", ".join("?" for _ in todas_las_columnas)
+    placeholders = ", ".join("%s" for _ in todas_las_columnas)
     nombres_columnas = ", ".join(todas_las_columnas)
     actualizaciones = ", ".join(f"{c} = excluded.{c}" for c in columnas_editables)
 
-    con.execute(f"""
+    con.cursor().execute(f"""
         INSERT INTO avisos_detalle ({nombres_columnas})
         VALUES ({placeholders})
         ON CONFLICT(id_aviso) DO UPDATE SET {actualizaciones}
@@ -404,10 +405,10 @@ def guardar_detalle_produccion(con, id_aviso: str, datos: dict) -> None:
 
 
 def actualizar_estado_publicacion(con, id_aviso: str, estado_publicacion: str) -> None:
-    con.execute("""
+    con.cursor().execute("""
         UPDATE avisos
-        SET estado_publicacion = ?, fecha_ultimo_chequeo_estado = ?
-        WHERE id_aviso = ?
+        SET estado_publicacion = %s, fecha_ultimo_chequeo_estado = %s
+        WHERE id_aviso = %s
     """, (estado_publicacion, date.today().isoformat(), id_aviso))
     con.commit()
 

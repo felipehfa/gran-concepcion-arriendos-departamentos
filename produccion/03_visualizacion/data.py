@@ -1,20 +1,33 @@
-"""Carga y join de datos desde la base de producción."""
+"""Carga y join de datos desde la base de producción (Supabase/Postgres)."""
 
 import importlib.util
-import sqlite3
+import os
 import sys
 import time
 from pathlib import Path
 
 import pandas as pd
+import psycopg2
 import streamlit as st
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRODUCCION_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = PRODUCCION_ROOT.parent
 INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-DB_PATH = PRODUCCION_ROOT / "01_modelo_produccion" / "produccion_gran_concepcion.db"
 INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+
+
+def _bd_string() -> str:
+    """BD_STRING viene de Streamlit secrets en Streamlit Cloud, o de la
+    variable de entorno homónima en local (ver .env). st.secrets lanza
+    StreamlitSecretNotFoundError (no simplemente False en el `in`) cuando no
+    existe ningún secrets.toml - pasa siempre en local, donde solo hay .env."""
+    try:
+        if "BD_STRING" in st.secrets:
+            return st.secrets["BD_STRING"]
+    except Exception:
+        pass
+    return os.environ["BD_STRING"]
 
 AMENITY_COLUMNS = {
     "amoblado": "Amoblado",
@@ -107,24 +120,26 @@ def _cargar_ingenieria_variables():
     return modulo
 
 
+def _conectar():
+    # sslmode='require' explícito: sin esto psycopg2 usa 'prefer' por
+    # default, que se degrada en silencio a texto plano si la negociación
+    # TLS llega a fallar por algún motivo, en vez de cortar la conexión.
+    return psycopg2.connect(_bd_string(), connect_timeout=10, sslmode="require")
+
+
 def _leer_avisos(query: str) -> pd.DataFrame:
-    # timeout alto: el orquestador puede estar escribiendo en la misma BD en
-    # paralelo (una fila cada ~0.5s durante la etapa de predicción).
-    #
-    # Reintentos: el workflow de GitHub Actions pushea la BD actualizada cada
-    # 4h, lo que gatilla un redeploy en Streamlit Cloud. Git escribe el archivo
-    # in-place (no via rename atómico), así que hay una ventana muy breve donde
-    # el checkout deja el archivo a medio escribir; si un request cae justo ahí,
-    # sqlite3 puede ver un archivo corrupto/truncado y lanzar OperationalError.
+    # Reintentos: la conexión es por red (Supabase), a diferencia del archivo
+    # local de antes - un hipo transitorio de red/pooler no debería tumbar la
+    # carga de la página.
     intentos = 3
     for intento in range(1, intentos + 1):
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = _conectar()
             try:
                 return pd.read_sql_query(query, conn)
             finally:
                 conn.close()
-        except sqlite3.OperationalError:
+        except psycopg2.OperationalError:
             if intento == intentos:
                 raise
             time.sleep(2 * intento)
@@ -133,7 +148,11 @@ def _leer_avisos(query: str) -> pd.DataFrame:
 def _procesar_avisos(df: pd.DataFrame) -> pd.DataFrame:
     if not df.empty:
         iv = _cargar_ingenieria_variables()
-        df = iv.convertir_precios_uf_a_clp(df, ruta_bd=str(DB_PATH))
+        conn = _conectar()
+        try:
+            df = iv.convertir_precios_uf_a_clp(df, con=conn)
+        finally:
+            conn.close()
         df["precio"] = df["precio_clp"]
         # Avisos en UF cuya fecha no se pudo resolver ni con la API ni con el
         # respaldo (precio_clp queda en None): sin precio estandarizado no se

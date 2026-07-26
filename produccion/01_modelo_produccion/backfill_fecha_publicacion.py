@@ -36,13 +36,15 @@ def main():
         log.warning(f"En cooldown tras un CAPTCHA reciente. Faltan ~{cooldown}. Corre esto más tarde.")
         return
 
-    pendientes = con.execute("""
+    cur = con.cursor()
+    cur.execute("""
         SELECT a.id_aviso, a.url, a.comuna, a.tipo_propiedad, a.estado_publicacion
         FROM avisos_detalle d
         JOIN avisos a ON a.id_aviso = d.id_aviso
         WHERE d.fecha_publicacion_texto IS NULL
           AND a.estado_publicacion = 'activo'
-    """).fetchall()
+    """)
+    pendientes = cur.fetchall()
 
     log.info(f"Total pendientes de backfill: {len(pendientes)}")
 

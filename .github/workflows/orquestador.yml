@@ -5,8 +5,10 @@ on:
     - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
   workflow_dispatch:         # permite correrlo manualmente desde la pestaña Actions
 
+# Ya no se pushea nada al repo (la BD vive en Supabase) - explícito solo
+# lectura en vez de heredar el default de permisos de GITHUB_TOKEN del repo.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: orquestador-produccion
@@ -32,18 +34,7 @@ jobs:
           pip install -r produccion/01_modelo_produccion/requirements.txt
 
       - name: Correr orquestador
+        env:
+          BD_STRING: ${{ secrets.BD_STRING }}
         run: |
           python produccion/01_modelo_produccion/00_orquestador.py
-
-      - name: Commit y push de la BD actualizada
-        if: always()   # persistir el diagnóstico (tabla corridas/logs_ejecucion) aunque el orquestador haya terminado en error
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add produccion/01_modelo_produccion/produccion_gran_concepcion.db
-          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          git diff --staged --quiet || git commit -m "Actualización automática BD producción [skip ci] - $TIMESTAMP"
-          # Push simple, sin merge automático: si main avanzó durante la corrida (ej. un
-          # push local con cambios en la BD), se descarta esta actualización en vez de
-          # pisarlo - la próxima corrida programada parte de la versión más reciente.
-          git push origin HEAD:main || echo "::warning::Push rechazado (main avanzó durante la corrida); se descarta esta actualización de BD para no pisar otros cambios. La próxima corrida programada lo reintenta."

@@ -62,12 +62,12 @@ produccion/
     entrenamiento/01_entrenar_modelo_produccion.py → entrena el algoritmo ganador, modelo versionado
                                                       (85/15 + calibración)
     00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
-    01_scraper_grilla_incremental.py               → tabla `avisos`          (produccion_gran_concepcion.db)
+    01_scraper_grilla_incremental.py               → tabla `avisos`          (Supabase/Postgres)
     02_scraper_detalle_incremental.py              → tabla `avisos_detalle` + estado_publicacion
     03_vulnerabilidad_produccion.py                → columnas de vulnerabilidad en `avisos_detalle`
     04_ingenieria_variables_produccion.py          → features de avisos nuevos (contra referencia histórica)
     05_prediccion.py                               → tabla `predicciones` (costo total predicho + etiqueta + confianza)
-          │  (produccion_gran_concepcion.db, solo lectura desde acá en adelante)
+          │  (Supabase/Postgres, solo lectura desde acá en adelante)
           ▼
   02_pruebas/             → prototipos/validación manual sobre el modelo de producción (no es pipeline)
   03_visualizacion/       → dashboard Streamlit, sección 10
@@ -100,8 +100,8 @@ modelamiento (ver [Quick start](#12-quick-start)).
 El repo separa `investigacion/` (etapas 01-04: scraping de investigación, exploración,
 ingeniería de variables y comparación de modelos candidatos) de `produccion/` (pipeline
 independiente que corre solo vía cron, más el dashboard) — dos mundos con una sola base de datos
-de investigación (`avisos_gran_concepcion.db`, versionada) y una de producción
-(`produccion_gran_concepcion.db`, actualizada por el orquestador). Los scripts de `produccion/`
+de investigación (`avisos_gran_concepcion.db`, SQLite versionada) y una de producción (Postgres en
+Supabase, actualizada por el orquestador vía `BD_STRING` — ver sección 9.4). Los scripts de `produccion/`
 reutilizan funciones de `investigacion/` vía `importlib` (sección 9) en vez de duplicar lógica de
 parsing/extracción; los nombres de carpeta dentro de `produccion/` se renumeraron de 01 a 03 al
 separarla de `investigacion/`, ya que dejó de ser continuación secuencial de la numeración 01-04.
@@ -145,7 +145,7 @@ gran-concepcion-rentals/
 │
 └── produccion/
     ├── 01_modelo_produccion/          # pipeline de producción, sección 9
-    │   ├── db.py                                    # esquema + conexión a produccion_gran_concepcion.db
+    │   ├── db.py                                    # esquema (CREATE TABLE IF NOT EXISTS) + conexión a Supabase/Postgres (BD_STRING)
     │   ├── 00_orquestador.py                        # corre las etapas de abajo en orden, logging + alertas
     │   ├── 01_scraper_grilla_incremental.py
     │   ├── 02_scraper_detalle_incremental.py
@@ -154,7 +154,6 @@ gran-concepcion-rentals/
     │   ├── 04_ingenieria_variables_produccion.py
     │   ├── 05_prediccion.py
     │   ├── requirements.txt                         # dependencias pineadas para GitHub Actions (sin geopandas ni playwright)
-    │   ├── produccion_gran_concepcion.db            # SQLite, propia de este pipeline
     │   ├── logs/orquestador.log                     # log rotativo (RotatingFileHandler)
     │   └── entrenamiento/
     │       ├── seleccionar_algoritmo.py             # compara xgboost vs lightgbm, elige ganador
@@ -279,8 +278,9 @@ etc.) está en [CHANGELOG.md](CHANGELOG.md).
 
 ### 3.4 Limpieza y conversión de datos
 
-- **Conversión UF → CLP** vía la API de `mindicador.cl`, con caché de valores de UF en una tabla
-  SQLite (`valores_uf`) para no repetir consultas entre corridas.
+- **Conversión UF → CLP** vía la API de `mindicador.cl`, con caché de valores de UF en la tabla
+  `valores_uf` para no repetir consultas entre corridas (dialect-aware: SQLite acá en investigación,
+  Postgres/Supabase cuando la reutiliza el pipeline de producción — sección 9.4).
 - Corrección de formato numérico chileno (separador de miles) al parsear distancias y precios.
 - Filtros de valores imposibles en dormitorios, baños y estacionamientos (probables errores de
   digitación).
@@ -698,9 +698,10 @@ Los resultados se exportan a `investigacion/04_modelamiento/save/model/` con un 
 ## 9. Pipeline de producción (`produccion/01_modelo_produccion/`)
 
 Sistema separado e independiente de `investigacion/01_obtener_datos/` a `investigacion/04_modelamiento/`: usa su **propia
-base de datos** (`produccion_gran_concepcion.db`), nunca escribe en `avisos_gran_concepcion.db`
-(la trata como fuente de solo lectura), y está pensado para correr sin intervención manual vía
-cron, agregando avisos nuevos y sus predicciones día a día.
+base de datos** (Postgres en Supabase — hasta 2026-07-26 fue un archivo SQLite versionado en el
+repo, ver sección 9.4), nunca escribe en `avisos_gran_concepcion.db` (la trata como fuente de solo
+lectura), y está pensado para correr sin intervención manual vía cron, agregando avisos nuevos y
+sus predicciones día a día.
 
 ### 9.1 Selección de algoritmo y entrenamiento
 
@@ -726,7 +727,8 @@ el elegido, no ambos.
 
 ### 9.2 Pipeline incremental
 
-**Esquema de `produccion_gran_concepcion.db`** (definido en `db.py`):
+**Esquema** (Postgres en Supabase, definido en `db.py` — `CREATE TABLE IF NOT EXISTS` en cada
+conexión, sin migraciones manuales):
 
 | Tabla | Contenido |
 |---|---|
@@ -736,7 +738,9 @@ el elegido, no ambos.
 | `predicciones` | Una fila por `(id_aviso, version_modelo)` — costo total predicho (`costo_total_predicho`, arriendo + gastos comunes), z_robusto, decil, etiqueta, confianza |
 | `corridas` | Metadatos de cada corrida del orquestador (contadores, motivo de corte, resultado) |
 | `logs_ejecucion` | Log persistente por etapa, espejo de `logs/orquestador.log` pero consultable con SQL |
+| `historial_diario_avisos` | Snapshot diario de `estado_publicacion` por aviso (UPSERT sobre `(fecha, id_aviso)`), usado por la pestaña de estadísticas diarias del dashboard |
 | `control` | Clave/valor genérico (ej. cooldown tras CAPTCHA del scraper de detalle) |
+| `valores_uf` | Caché de valor UF por fecha (mindicador.cl), compartida entre `05_prediccion.py` y el dashboard — definida en `investigacion/03_ingenieria_variables/01_ingenieria_variables.py`, no en `db.py` |
 
 **Etapas** (cada una reutiliza el script equivalente de investigación vía `importlib`, sin
 duplicar lógica de parsing/extracción):
@@ -766,15 +770,49 @@ CAPTCHA en el scraper de detalle no es una excepción: las etapas siguientes igu
 corrida queda `'parcial'`. **Alerta de fallo silencioso** si las últimas 5 corridas tuvieron 0
 avisos nuevos (posible cambio de estructura del sitio o bloqueo no detectado).
 
-Desplegado vía GitHub Actions, corre cada 4 horas + `workflow_dispatch` manual; el commit/push de
-la base corre con `if: always()`, así que el diagnóstico se persiste aunque el job termine en
-error.
+Desplegado vía GitHub Actions, corre cada 4 horas + `workflow_dispatch` manual, conectándose a
+Supabase con el secret `BD_STRING` (ver sección 9.4) — ya no hay ningún paso de commit/push al
+repo: el diagnóstico de cada corrida (tabla `corridas`/`logs_ejecucion`) queda en la base aunque
+el job termine en error.
+
+### 9.4 Base de datos: por qué Supabase y no un `.db` versionado
+
+Hasta el 2026-07-26 la base de producción era un archivo SQLite (`produccion_gran_concepcion.db`,
+~20 MB) versionado en el repo: el orquestador lo actualizaba y lo commiteaba/pusheaba a `main`
+cada corrida (6 veces al día). Dos problemas reales de ese approach motivaron la migración a
+Postgres gestionado en Supabase:
+
+- **Crecimiento sin techo del repo**: git no comprime bien un blob binario que se reescribe casi
+  entero en cada commit (SQLite reordena páginas internamente) — con 6 commits/día para siempre,
+  el `.git` del repo iba a crecer indefinidamente.
+- **Corrupción intermitente en el dashboard**: Streamlit Cloud redeploya en cada push; git escribe
+  el archivo *in-place* (no vía rename atómico), así que había una ventana breve donde un request
+  podía leer el `.db` a medio escribir y tirar `OperationalError`.
+
+La migración (código en `db.py`, los 6 scripts de `01_modelo_produccion/`, `data.py` del
+dashboard, y las funciones de caché UF de `investigacion/03_ingenieria_variables/01_ingenieria_variables.py`,
+que ahora son dialect-aware SQLite/Postgres) usa `psycopg2` contra el *connection pooler* de
+Supabase (modo *transaction*, puerto 6543 — no la conexión directa: los runners de GitHub Actions
+no tienen salida IPv6 confiable, y la conexión directa de Supabase resuelve solo por IPv6). La
+conexión fuerza `sslmode=require` de forma explícita. El connection string vive en la variable de
+entorno `BD_STRING` — como secret de GitHub Actions para el orquestador, y como Streamlit secret
+para el dashboard —, nunca commiteado (ver [SETUP.md](SETUP.md)).
+
+**Mínimo privilegio**: el orquestador y el dashboard usan roles de Postgres distintos. El
+orquestador escribe con el rol dueño del schema (`postgres`); el dashboard —público, de solo
+lectura salvo por la caché de UF— usa `streamlit_app`, con `SELECT` en todo el schema `public` y
+`INSERT`/`UPDATE` únicamente en `valores_uf`. Así, si el secret del dashboard llegara a filtrarse,
+no alcanza para escribir ni borrar en las tablas de negocio (`avisos`, `predicciones`, `corridas`,
+etc.) — detalle de los grants en [SETUP.md](SETUP.md).
+
+`investigacion/01_obtener_datos/avisos_gran_concepcion.db` (la base de investigación) **no se
+migró**: sigue siendo SQLite local, versionada, sin escritura automática ni secrets.
 
 ---
 
 ## 10. Visualización (`produccion/03_visualizacion/`)
 
-Dashboard Streamlit de solo lectura sobre `produccion_gran_concepcion.db`: **nunca escribe** en
+Dashboard Streamlit de solo lectura sobre la base de producción (Supabase): **nunca escribe** en
 las tablas de negocio (`avisos`, `avisos_detalle`, `predicciones`) — la única escritura que hace
 es indirecta, vía la caché compartida `valores_uf`, la misma tabla que ya usa `05_prediccion.py`.
 Hecho **a modo de prueba y aprendizaje**, no es un servicio de tasación.
@@ -791,9 +829,10 @@ Hecho **a modo de prueba y aprendizaje**, no es un servicio de tasación.
 | `styles.py` | Paleta de colores + CSS inyectado (tarjetas, badges, tema) |
 | `.streamlit/config.toml` | Tema forzado a claro |
 
-Las rutas a `produccion_gran_concepcion.db` y al módulo de ingeniería de variables se resuelven
-relativas a `Path(__file__)`, no hardcodeadas, para que `streamlit run app.py` funcione sin
-importar desde qué directorio se invoque (ver [SETUP.md](SETUP.md) para cómo correrlo).
+La ruta al módulo de ingeniería de variables se resuelve relativa a `Path(__file__)`, no
+hardcodeada, para que `streamlit run app.py` funcione sin importar desde qué directorio se
+invoque. La conexión a la base (`BD_STRING`) se lee de `st.secrets` en Streamlit Cloud o de la
+variable de entorno homónima en local (ver [SETUP.md](SETUP.md) para cómo correrlo).
 
 ### 10.2 Decisiones de diseño no obvias
 
@@ -814,8 +853,8 @@ importar desde qué directorio se invoque (ver [SETUP.md](SETUP.md) para cómo c
   `precio_de_mercado`) y el nivel de confianza sí reflejan la comparación por costo total, aunque
   el dashboard no muestre el número `costo_total_predicho` explícitamente (ver pestaña "Cómo
   funciona" en `explicacion.py`).
-- **`timeout=30`** en la conexión SQLite (vs. default 5s): el orquestador puede estar escribiendo
-  en la misma base en paralelo.
+- **Reintentos con backoff** en la lectura (hasta 3 intentos): la conexión es por red (Supabase),
+  así que un hipo transitorio del pooler no debería tumbar la carga de la página.
 - Cacheado con `st.cache_data(ttl=600)` — la base la actualiza el orquestador vía cron, no cada
   request.
 - **Tema forzado a claro**: el modo oscuro del navegador dejaba el header y las tarjetas

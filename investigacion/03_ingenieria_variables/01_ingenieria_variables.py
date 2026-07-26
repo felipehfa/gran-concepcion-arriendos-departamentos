@@ -325,35 +325,50 @@ def rellenar_cantidad_pois_cercanos(df: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------------------
 # Conversión de precios en UF a CLP (con caché en la propia BD)
+#
+# Estas 4 funciones son dialect-aware (SQLite o Postgres/psycopg2) porque
+# `convertir_precios_uf_a_clp` la reutiliza tanto la investigación (siempre
+# SQLite, vía `ruta_bd`) como el pipeline de producción (Postgres/Supabase,
+# vía una conexión `con` ya abierta que pasan 05_prediccion.py y data.py del
+# visualizador) - ver comentario en convertir_precios_uf_a_clp más abajo.
 # ------------------------------------------------------------------
-def inicializar_tabla_uf(con: sqlite3.Connection) -> None:
+def _es_postgres(con) -> bool:
+    return con.__class__.__module__.startswith("psycopg2")
+
+
+def inicializar_tabla_uf(con) -> None:
     """Crea (si no existe) la tabla que cachea el valor de la UF por fecha."""
-    con.execute("""
+    tipo_valor = "DOUBLE PRECISION" if _es_postgres(con) else "REAL"
+    con.cursor().execute(f"""
         CREATE TABLE IF NOT EXISTS valores_uf (
             fecha TEXT PRIMARY KEY,   -- formato YYYY-MM-DD
-            valor REAL
+            valor {tipo_valor}
         )
     """)
     con.commit()
 
 
-def obtener_valores_uf_desde_bd(con: sqlite3.Connection, fechas: list) -> dict:
+def obtener_valores_uf_desde_bd(con, fechas: list) -> dict:
     """Devuelve {Timestamp: valor} solo para las fechas que YA están cacheadas en la BD."""
     if not fechas:
         return {}
+    marcador = "%s" if _es_postgres(con) else "?"
     fechas_str = [f.strftime("%Y-%m-%d") for f in fechas]
-    placeholders = ",".join("?" for _ in fechas_str)
-    cur = con.execute(f"SELECT fecha, valor FROM valores_uf WHERE fecha IN ({placeholders})", fechas_str)
+    placeholders = ",".join(marcador for _ in fechas_str)
+    cur = con.cursor()
+    cur.execute(f"SELECT fecha, valor FROM valores_uf WHERE fecha IN ({placeholders})", fechas_str)
     return {pd.Timestamp(fecha): valor for fecha, valor in cur.fetchall()}
 
 
-def guardar_valor_uf_en_bd(con: sqlite3.Connection, fecha: pd.Timestamp, valor: float) -> None:
+def guardar_valor_uf_en_bd(con, fecha: pd.Timestamp, valor: float) -> None:
     """Guarda (o reemplaza) el valor de la UF de una fecha, con commit inmediato
     para no perder la consulta si la corrida se interrumpe a mitad de camino."""
-    con.execute(
-        "INSERT OR REPLACE INTO valores_uf (fecha, valor) VALUES (?, ?)",
-        (fecha.strftime("%Y-%m-%d"), valor),
-    )
+    if _es_postgres(con):
+        sql = ("INSERT INTO valores_uf (fecha, valor) VALUES (%s, %s) "
+               "ON CONFLICT (fecha) DO UPDATE SET valor = excluded.valor")
+    else:
+        sql = "INSERT OR REPLACE INTO valores_uf (fecha, valor) VALUES (?, ?)"
+    con.cursor().execute(sql, (fecha.strftime("%Y-%m-%d"), valor))
     con.commit()
 
 
@@ -377,7 +392,7 @@ def obtener_valor_uf_api(fecha: pd.Timestamp, reintentos: int = 3, espera: float
     return None
 
 
-def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT) -> pd.DataFrame:
+def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT, con=None) -> pd.DataFrame:
     """
     Crea la columna 'precio_clp': para avisos publicados en CLP la copia tal
     cual, para los publicados en UF la convierte usando el valor de la UF de
@@ -386,6 +401,12 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
     aviso en UF le falta la fecha de publicación, usa como respaldo el
     promedio de fechas de todo el dataset), y para los publicados en US$ usa
     la tasa fija TASA_USD_CLP.
+
+    Si se pasa `con` (conexión ya abierta - Postgres en producción, ver
+    05_prediccion.py y data.py del visualizador), se usa esa y no se cierra
+    acá (el caller es dueño de su ciclo de vida). Si no, se abre una conexión
+    SQLite propia a `ruta_bd` (comportamiento original, para investigación) y
+    se cierra al terminar.
     """
     # Paso 0: asegurar que fecha_publicacion_aprox sea datetime
     df["fecha_publicacion_aprox"] = pd.to_datetime(df["fecha_publicacion_aprox"], errors="coerce")
@@ -404,7 +425,9 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
     # timeout alto: el orquestador escribe en la misma BD en paralelo (una fila
     # cada ~0.5s durante la etapa de predicción), así que un writer ocasional
     # no debería tumbar esta lectura/escritura con "database is locked".
-    con = sqlite3.connect(ruta_bd, timeout=30)
+    con_propia = con is None
+    if con_propia:
+        con = sqlite3.connect(ruta_bd, timeout=30)
     inicializar_tabla_uf(con)
 
     valor_uf_por_fecha = obtener_valores_uf_desde_bd(con, fechas_a_verificar)
@@ -427,7 +450,8 @@ def convertir_precios_uf_a_clp(df: pd.DataFrame, ruta_bd: str = RUTA_BD_DEFAULT)
                     guardar_valor_uf_en_bd(con, fecha, valor)  # se guarda de inmediato para la próxima corrida
                     valor_uf_por_fecha[fecha] = valor
 
-    con.close()
+    if con_propia:
+        con.close()
 
     # Paso 4: convertir a CLP (usa el valor de la fecha propia; si esa fecha
     # específica no se pudo obtener, cae al valor ya resuelto de fecha_promedio)

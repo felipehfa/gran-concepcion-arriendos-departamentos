@@ -125,7 +125,7 @@ def calcular_precio_clp(con_produccion, id_avisos: list) -> pd.DataFrame:
     if not id_avisos:
         return pd.DataFrame(columns=["id_aviso", "precio_clp"])
 
-    placeholders = ",".join("?" for _ in id_avisos)
+    placeholders = ",".join("%s" for _ in id_avisos)
     datos = pd.read_sql_query(f"""
         SELECT a.id_aviso, a.precio, a.moneda, d.fecha_publicacion_aprox
         FROM avisos a
@@ -135,7 +135,7 @@ def calcular_precio_clp(con_produccion, id_avisos: list) -> pd.DataFrame:
 
     if (datos["moneda"] == "UF").any():
         try:
-            datos = iv.convertir_precios_uf_a_clp(datos, ruta_bd=str(db.RUTA_BD_PRODUCCION))
+            datos = iv.convertir_precios_uf_a_clp(datos, con=con_produccion)
         except Exception as e:
             log.warning(f"No se pudo convertir precios UF->CLP ({e}). "
                         f"Los avisos en UF se excluyen de esta corrida.")
@@ -152,11 +152,11 @@ def calcular_precio_clp(con_produccion, id_avisos: list) -> pd.DataFrame:
 def guardar_prediccion(con, id_aviso: str, version_modelo: str, costo_total_predicho: float,
                         z_robusto: float, decil_precio: int, etiqueta: str,
                         nivel_confianza: str, cv_ensamble: float) -> None:
-    con.execute("""
+    con.cursor().execute("""
         INSERT INTO predicciones (
             id_aviso, version_modelo, fecha_prediccion, costo_total_predicho,
             z_robusto, decil_precio, etiqueta, nivel_confianza, cv_ensamble
-        ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), %s, %s, %s, %s, %s, %s)
         ON CONFLICT(id_aviso, version_modelo) DO UPDATE SET
             fecha_prediccion      = excluded.fecha_prediccion,
             costo_total_predicho  = excluded.costo_total_predicho,

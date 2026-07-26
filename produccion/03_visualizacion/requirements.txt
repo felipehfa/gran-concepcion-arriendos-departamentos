@@ -1,6 +1,7 @@
 streamlit==1.58.0
-pandas
-numpy
-requests
-joblib
-scikit-learn
+pandas==3.0.3
+numpy==2.4.6
+requests==2.34.2
+joblib==1.5.3
+scikit-learn==1.9.0
+psycopg2-binary==2.9.12

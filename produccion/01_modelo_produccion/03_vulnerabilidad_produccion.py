@@ -66,10 +66,12 @@ def normalizar_nombre(texto: str) -> str:
 # Polígonos (desde la tabla precalculada, no desde el shapefile)
 # ------------------------------------------------------------------
 def cargar_poligonos_gran_concepcion(con) -> list:
-    filas = con.execute("""
+    cur = con.cursor()
+    cur.execute("""
         SELECT uv_rsh, comuna, rank_nac, pob_rsh_uv, p_urbano, c_ig_com, hog_uv, geometria_wkt
         FROM poligonos_vulnerabilidad_uv
-    """).fetchall()
+    """)
+    filas = cur.fetchall()
 
     if not filas:
         raise RuntimeError(
@@ -110,6 +112,7 @@ def resolver_vulnerabilidad(con, poligonos: list, pendientes: pd.DataFrame) -> d
         return {"avisos_procesados": 0, "avisos_sin_uv": 0}
 
     avisos_sin_uv = 0
+    cur = con.cursor()
     for _, fila in pendientes.iterrows():
         punto = Point(fila["longitud"], fila["latitud"])
         # Primera Unidad Vecinal cuyo polígono contiene el punto (no
@@ -121,10 +124,10 @@ def resolver_vulnerabilidad(con, poligonos: list, pendientes: pd.DataFrame) -> d
             avisos_sin_uv += 1
             continue
 
-        con.execute("""
+        cur.execute("""
             UPDATE avisos_detalle
-            SET uv_rsh = ?, rank_nac = ?, pob_rsh_uv = ?, p_urbano = ?, c_ig_com = ?, hog_uv = ?
-            WHERE id_aviso = ?
+            SET uv_rsh = %s, rank_nac = %s, pob_rsh_uv = %s, p_urbano = %s, c_ig_com = %s, hog_uv = %s
+            WHERE id_aviso = %s
         """, (
             encontrado["uv_rsh"], encontrado["rank_nac"], encontrado["pob_rsh_uv"],
             encontrado["p_urbano"], encontrado["c_ig_com"], encontrado["hog_uv"], fila["id_aviso"],
