@@ -10,7 +10,7 @@ del connection pooler de Supabase, modo transaction - ver .env).
 
 Tablas (ver inicializar_bd_produccion más abajo para el detalle de columnas):
 avisos, avisos_detalle, poligonos_vulnerabilidad_uv, predicciones, corridas,
-logs_ejecucion, historial_diario_avisos, control.
+logs_ejecucion, historial_diario_avisos, control, valores_uf.
 """
 
 import os
@@ -223,6 +223,20 @@ def inicializar_bd_produccion(con: psycopg2.extensions.connection) -> None:
         CREATE TABLE IF NOT EXISTS control (
             clave  TEXT PRIMARY KEY,
             valor  TEXT
+        )
+    """)
+
+    # valores_uf: caché del valor de la UF por fecha, usada por
+    # convertir_precios_uf_a_clp (investigacion/03_ingenieria_variables/01_ingenieria_variables.py).
+    # Se crea acá (con el rol `postgres`, dueño del schema) y no solo desde esa
+    # función, porque el rol `streamlit_app` del dashboard (ver SETUP.md) no
+    # tiene privilegio CREATE sobre el schema - si esta tabla no existiera ya
+    # cuando el dashboard hace su primera consulta, el CREATE TABLE IF NOT
+    # EXISTS de esa función fallaría con InsufficientPrivilege.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS valores_uf (
+            fecha TEXT PRIMARY KEY,
+            valor DOUBLE PRECISION
         )
     """)
 

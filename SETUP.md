@@ -139,9 +139,12 @@ Configuración por entorno:
   string del rol `streamlit_app`, **no** el de `postgres`.
 
 El schema **no requiere ningún paso manual**: `db.py` corre `CREATE TABLE IF NOT EXISTS` para las
-8 tablas en cada conexión (`conectar_produccion()`), así que apuntar `BD_STRING` a un proyecto
+9 tablas en cada conexión (`conectar_produccion()`), así que apuntar `BD_STRING` a un proyecto
 Supabase vacío y correr el pipeline una vez ya lo deja listo — no hay un `.sql` aparte que
-mantener sincronizado a mano.
+mantener sincronizado a mano. Esto incluye `valores_uf`: hace falta que el orquestador (rol
+`postgres`) la cree al menos una vez antes de que el dashboard (rol `streamlit_app`, sin privilegio
+`CREATE` sobre el schema) la toque, porque su propio intento de `CREATE TABLE IF NOT EXISTS` en
+`inicializar_tabla_uf()` fallaría con `InsufficientPrivilege` si la tabla no existiera todavía.
 
 ---
 

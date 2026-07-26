@@ -337,15 +337,37 @@ def _es_postgres(con) -> bool:
 
 
 def inicializar_tabla_uf(con) -> None:
-    """Crea (si no existe) la tabla que cachea el valor de la UF por fecha."""
-    tipo_valor = "DOUBLE PRECISION" if _es_postgres(con) else "REAL"
-    con.cursor().execute(f"""
-        CREATE TABLE IF NOT EXISTS valores_uf (
-            fecha TEXT PRIMARY KEY,   -- formato YYYY-MM-DD
-            valor {tipo_valor}
-        )
-    """)
-    con.commit()
+    """Crea (si no existe) la tabla que cachea el valor de la UF por fecha.
+
+    En Postgres/producción, `db.py` ya crea esta tabla con el rol `postgres`
+    (dueño del schema) antes de que el dashboard llegue a este punto; el rol
+    `streamlit_app` del dashboard solo tiene SELECT/INSERT/UPDATE sobre ella
+    (ver SETUP.md), sin privilegio CREATE sobre el schema. Si por algún motivo
+    la tabla no existiera todavía (orquestador que aún no corrió una primera
+    vez), el CREATE TABLE de acá fallaría con InsufficientPrivilege para ese
+    rol - se ignora ese error puntual porque no es responsabilidad del
+    dashboard crear tablas, solo usarlas.
+    """
+    es_postgres = _es_postgres(con)
+    tipo_valor = "DOUBLE PRECISION" if es_postgres else "REAL"
+    try:
+        con.cursor().execute(f"""
+            CREATE TABLE IF NOT EXISTS valores_uf (
+                fecha TEXT PRIMARY KEY,   -- formato YYYY-MM-DD
+                valor {tipo_valor}
+            )
+        """)
+        con.commit()
+    except Exception as exc:
+        # Import local (no hay psycopg2 en investigacion/requirements.txt -
+        # este módulo también corre con solo SQLite): si `con` es de Postgres,
+        # ya se importó al abrir esa conexión, así que este import es gratis.
+        if es_postgres:
+            import psycopg2.errors
+            if isinstance(exc, psycopg2.errors.InsufficientPrivilege):
+                con.rollback()
+                return
+        raise
 
 
 def obtener_valores_uf_desde_bd(con, fechas: list) -> dict:
