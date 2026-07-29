@@ -332,6 +332,21 @@ def obtener_pendientes_rechequeo(
     podrían dejar de estarlo - 'finalizado'/'no_disponible' quedan afuera
     por ser estados terminales que ya no cambian.
 
+    Exige que el aviso YA tenga fila en avisos_detalle (INNER JOIN). Un aviso
+    recién descubierto por el scraper de grilla también tiene
+    estado_publicacion='activo' (default) y fecha_ultimo_chequeo_estado NULL
+    (nunca seteado) - sin este filtro calificaría para el NULL-primero de
+    arriba en la MISMA corrida en que obtener_pendientes_nuevos() ya lo trae,
+    así que visitar_aviso() lo visitaría dos veces en una sola corrida (una
+    como "nuevo", otra como "re-chequeo" de este mismo método). Eso duplica
+    el tráfico hacia el sitio sin necesidad y, si el aviso está fallando (ver
+    intentos_fallidos_detalle), quema el contador al doble de velocidad -
+    confirmado en un caso real: MLC-4261699204 acumuló
+    intentos_fallidos_detalle=2 en una sola corrida (2026-07-29 #114) por
+    haber sido visitado en ambas rutas. El caso de "recién migrado del
+    histórico" que sí motiva el NULL-primero ya tiene su fila en
+    avisos_detalle desde la migración, así que este filtro no lo excluye.
+
     Los NULL van primero (son los más urgentes: nunca se confirmó su estado)
     y entre ellos no hay un orden natural adicional. SQLite ordena NULL antes
     que cualquier fecha en ASC por defecto, pero Postgres hace lo contrario
@@ -348,11 +363,12 @@ def obtener_pendientes_rechequeo(
     """
     fecha_limite = (date.today() - timedelta(days=dias_min)).isoformat()
     pendientes = pd.read_sql_query("""
-        SELECT id_aviso, url, comuna, tipo_propiedad, fecha_ultimo_chequeo_estado, estado_publicacion
-        FROM avisos
-        WHERE estado_publicacion IN ('activo', 'pausado')
-          AND (fecha_ultimo_chequeo_estado IS NULL OR fecha_ultimo_chequeo_estado <= %s)
-        ORDER BY fecha_ultimo_chequeo_estado ASC NULLS FIRST
+        SELECT a.id_aviso, a.url, a.comuna, a.tipo_propiedad, a.fecha_ultimo_chequeo_estado, a.estado_publicacion
+        FROM avisos a
+        INNER JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
+        WHERE a.estado_publicacion IN ('activo', 'pausado')
+          AND (a.fecha_ultimo_chequeo_estado IS NULL OR a.fecha_ultimo_chequeo_estado <= %s)
+        ORDER BY a.fecha_ultimo_chequeo_estado ASC NULLS FIRST
         LIMIT %s
     """, con, params=(fecha_limite, batch))
     return pendientes.dropna(subset=["url"])
