@@ -22,22 +22,22 @@ def _img_data_uri(nombre_archivo: str) -> str:
 
 
 # Top 10 features por importancia SHAP (magnitud + dirección) del modelo vigente
-# (v0006_20260721211302_lightgbm_5fbde493), calculadas por
-# produccion/02_pruebas/analisis_shap.py sobre los 245 avisos de test — ver sección 4.1
+# (v0007_20260729210559_lightgbm_a9fa277f), calculadas por
+# produccion/02_pruebas/analisis_shap.py sobre los 365 avisos de test — ver sección 4.1
 # del README para la metodología y la tabla completa (29 features). Contenido estático
 # (no se lee en vivo), igual que el resto de las cifras de este archivo: hay que
 # actualizarlo a mano si se reentrena el modelo y cambia el ranking.
 _SHAP_TOP10 = [
-    ("Superficie útil", "18,1%", "sube"),
+    ("Superficie total", "18,9%", "sube"),
     ("Número de baños", "17,5%", "sube"),
-    ("Superficie total", "14,5%", "sube"),
-    ("Número de estacionamientos", "6,9%", "sube"),
-    ("Costo total/m² de comparables cercanos", "5,5%", "sube"),
-    ("Amoblado", "3,9%", "sube"),
-    ("Distancia al centro de Concepción", "3,6%", "baja"),
-    ("Vulnerabilidad del sector (ranking nacional)", "3,4%", "sube"),
-    ("Porcentaje urbano del sector", "3,0%", "baja"),
-    ("Ascensor", "2,9%", "sube"),
+    ("Superficie útil", "12,3%", "sube"),
+    ("Número de estacionamientos", "6,4%", "sube"),
+    ("Costo total/m² de comparables cercanos", "5,8%", "sube"),
+    ("Amoblado", "5,1%", "sube"),
+    ("Vulnerabilidad del sector (ranking nacional)", "4,0%", "sube"),
+    ("Hogares en el Registro Social de Hogares", "2,8%", "baja"),
+    ("Antigüedad del edificio", "2,8%", "baja"),
+    ("Porcentaje urbano del sector", "2,5%", "baja"),
 ]
 
 _SHAP_DIRECCION_ICONO = {"sube": ("↑", COLOR_OPORTUNIDAD), "baja": ("↓", COLOR_CARO)}
@@ -158,11 +158,11 @@ sobre lo esperado.
 
 ### Cantidad de datos usados
 
-El modelo vigente (`v0006_20260721211302_lightgbm_5fbde493`) se entrenó con **1.627 avisos**
-de departamentos en arriendo, divididos en:
+El modelo vigente (`v0007_20260729210559_lightgbm_a9fa277f`) se entrenó con **2.430 avisos**
+de departamentos en arriendo (activos, pausados y finalizados recientes), divididos en:
 
-- **1.382 avisos** para entrenar el modelo (ajuste + early stopping).
-- **245 avisos** que el modelo nunca vio durante el entrenamiento, usados solo para medir
+- **2.065 avisos** para entrenar el modelo (ajuste + early stopping).
+- **365 avisos** que el modelo nunca vio durante el entrenamiento, usados solo para medir
   qué tan bien predice (conjunto de test).
 
 Es un dataset acotado a una sola ciudad y a un momento puntual en el tiempo — no es un
@@ -197,7 +197,7 @@ hacia abajo), y la suma de todas esas contribuciones más el promedio general da
 final de ese aviso. Es una técnica exacta para modelos de árboles como este (no una
 aproximación), y es la misma que ya se usó para elegir estas 29 variables entre 41 candidatas.
 
-Promediando esas contribuciones (en valor absoluto) sobre los 245 avisos de test se obtiene qué
+Promediando esas contribuciones (en valor absoluto) sobre los 365 avisos de test se obtiene qué
 tan determinante es cada variable **en general** — no para un aviso puntual:
 
 """
@@ -207,12 +207,12 @@ tan determinante es cada variable **en general** — no para un aviso puntual:
 
 Las **características físicas** (superficie, baños, estacionamientos y el resto de las
 amenities) concentran en conjunto **~75%** de la importancia total, ubicación y mercado local
-**~16%**, y el contexto socioeconómico del sector **~9%**. Superficie útil y número de baños,
-por sí solas, ya explican cerca de un tercio de cada predicción — son, con diferencia, lo que
+**~16%**, y el contexto socioeconómico del sector **~9%**. Superficie total y número de baños,
+por sí solas, ya explican más de un tercio de cada predicción — son, con diferencia, lo que
 más mueve el costo total estimado.
 
 **Vista aviso por aviso**: el gráfico de arriba solo muestra el promedio. Este otro muestra la
-contribución real de cada uno de los 245 avisos de test, no el promedio:
+contribución real de cada uno de los 365 avisos de test, no el promedio:
 
 """
         + f'<img src="{_img_data_uri("shap_beeswarm.png")}" alt="Beeswarm de contribuciones SHAP por aviso" style="width:100%;max-width:720px;display:block;margin:6px auto;" />'
@@ -226,15 +226,15 @@ puntos y que no queden todos amontonados unos sobre otros.
 
 Lo que se ve acá que el gráfico de barras no muestra:
 
-- En baños, ascensor, amoblado, piscina, bodegas y estacionamientos, los puntos azules y rojos
-  quedan casi completamente separados en dos grupos — el efecto de estas variables es parejo en
-  casi todos los avisos, no solo "en promedio".
+- En baños, amoblado, ascensor y conserjería, los puntos azules y rojos quedan casi
+  completamente separados en dos grupos — el efecto de estas variables es parejo en casi todos
+  los avisos, no solo "en promedio".
 - En superficie útil y superficie total, la mayoría de los avisos están agrupados cerca del
   centro, pero un grupo chico de departamentos muy grandes tiene un impacto mucho mayor que el
   resto — el efecto del tamaño no es parejo: se dispara en los departamentos más grandes.
-- En las variables del sector (ranking de vulnerabilidad, porcentaje urbano) los colores están
-  más mezclados — el efecto existe pero es menos parejo entre avisos que el de las
-  características físicas del departamento.
+- En las variables del sector (ranking de vulnerabilidad, porcentaje urbano, hogares del RSH)
+  los colores están más mezclados — el efecto existe pero es menos parejo entre avisos que el
+  de las características físicas del departamento.
 
 </div>
 
@@ -242,17 +242,17 @@ Lo que se ve acá que el gráfico de barras no muestra:
 
 ### Qué tan preciso es (el error del modelo)
 
-Medido sobre los 245 avisos de test (que el modelo no usó para entrenar), comparando el costo
+Medido sobre los 365 avisos de test (que el modelo no usó para entrenar), comparando el costo
 total predicho contra el costo total real (arriendo + gastos comunes):
 
 | Métrica | Valor | Qué significa |
 |---|---|---|
-| Error promedio (MAE) | **≈ \\$61.500** | En promedio, la predicción se equivoca por unos \\$61.500 respecto al costo total real |
-| Error porcentual (MAPE) | **≈ 10,0%** | En promedio, la predicción se desvía ~10,0% del costo total real |
-| R² | **≈ 0,80** | El modelo explica ~80% de la variación de costo total entre avisos — queda ~20% sin explicar |
+| Error promedio (MAE) | **≈ \\$42.500** | En promedio, la predicción se equivoca por unos \\$42.500 respecto al costo total real |
+| Error porcentual (MAPE) | **≈ 6,7%** | En promedio, la predicción se desvía ~6,7% del costo total real |
+| R² | **≈ 0,88** | El modelo explica ~88% de la variación de costo total entre avisos — queda ~12% sin explicar |
 
 El error **no es parejo en todo el rango de precios**: en departamentos más caros (sobre
-~\\$740.000 de costo total) el error típico sube a más de \\$114.000, porque hay menos avisos en
+~\\$750.000 de costo total) el error típico sube a cerca de \\$79.000, porque hay menos avisos en
 ese rango para aprender de ellos y los precios son más variables. Por eso la calificación de
 "oportunidad" no compara contra un error único, sino contra el error típico de avisos de costo
 similar (ver estratos más abajo).
@@ -262,12 +262,12 @@ costo total sin ningún modelo:
 
 | Cómo se estima el costo total | Error promedio (MAE) |
 |---|---|
-| Usar siempre el costo total promedio del mercado, sin distinguir entre avisos | ≈ \\$141.900 |
-| Costo total/m² del sector × superficie del departamento, sin ajustar nada más | ≈ \\$93.200 |
-| **Este modelo** | **≈ \\$61.500** |
+| Usar siempre el costo total promedio del mercado, sin distinguir entre avisos | ≈ \\$150.800 |
+| Costo total/m² del sector × superficie del departamento, sin ajustar nada más | ≈ \\$86.500 |
+| **Este modelo** | **≈ \\$42.500** |
 
-El modelo reduce el error en un tercio frente a usar solo el costo total/m² del sector, y en
-más de la mitad frente a asumir un costo total promedio único para todo el mercado.
+El modelo reduce el error casi a la mitad frente a usar solo el costo total/m² del sector, y en
+más de dos tercios frente a asumir un costo total promedio único para todo el mercado.
 
 </div>
 
@@ -275,15 +275,15 @@ más de la mitad frente a asumir un costo total promedio único para todo el mer
 
 ### Los estratos (deciles de costo total)
 
-Para calibrar cuándo un costo total es "raro", los 245 avisos de test se agruparon en **10
+Para calibrar cuándo un costo total es "raro", los 365 avisos de test se agruparon en **10
 estratos según su costo total mensual** (deciles), y para cada estrato se calculó su propio
 error típico (mediana del error y MAD — desviación absoluta mediana, una versión del error
 típico menos sensible a valores extremos que la desviación estándar). Los bordes de costo
 total de cada estrato en el modelo vigente son:
 
-`< $417.000` · `$417.000–460.000` · `$460.000–495.200` · `$495.200–548.000` ·
-`$548.000–580.075` · `$580.075–630.000` · `$630.000–664.000` · `$664.000–730.000` ·
-`$730.000–796.060` · `> $796.060`
+`< $435.000` · `$435.000–469.400` · `$469.400–500.000` · `$500.000–550.000` ·
+`$550.000–581.563` · `$581.563–632.000` · `$632.000–680.000` · `$680.000–745.000` ·
+`$745.000–856.000` · `> $856.000`
 
 Cada aviso se compara solo contra el error típico de su propio estrato, no contra un
 promedio general del mercado.
@@ -342,7 +342,7 @@ ten en cuenta:
   arrendador, entre otras cosas que no están en los datos scrapeados.
 - Los datos vienen de avisos publicados — pueden tener errores de tipeo, precios o gastos
   comunes desactualizados, o información incompleta que el scraper no pudo capturar bien.
-- El error típico del modelo (~10,0%, más alto en tramos de costo poco frecuentes) significa
+- El error típico del modelo (~6,7%, más alto en tramos de costo poco frecuentes) significa
   que **puede fallar**, incluso en avisos marcados con confianza alta.
 - Revisa siempre la publicación original y otras variables no capturadas por el modelo antes
   de sacar conclusiones sobre un aviso puntual.
