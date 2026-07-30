@@ -66,6 +66,7 @@ SELECT
     a.fecha_ultimo_chequeo_estado,
     d.barrio,
     d.superficie_util_m2,
+    d.superficie_total_m2,
     d.gastos_comunes,
     d.antiguedad_anos,
     d.amoblado,

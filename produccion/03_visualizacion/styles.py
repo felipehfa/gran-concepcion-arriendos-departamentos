@@ -157,6 +157,11 @@ def inject_css() -> None:
             font-size: 0.88rem;
             margin-bottom: 6px;
         }}
+        .card-amenities {{
+            color: {COLOR_TEXT_BODY} !important;
+            font-size: 0.88rem;
+            margin-bottom: 6px;
+        }}
         .card-price {{
             color: {COLOR_TEXT_TITLE} !important;
             font-size: 1.35rem;

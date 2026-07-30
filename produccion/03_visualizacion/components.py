@@ -49,6 +49,24 @@ def _format_frescura(fecha_str) -> str:
     return f"Datos verificados: hace {dias} días"
 
 
+def _format_superficie(util: float, total) -> str:
+    texto = f"{util:.0f} m² útiles"
+    if pd.notna(total):
+        texto += f" ({total:.0f} m² totales)"
+    return texto
+
+
+def _format_estacionamientos(cantidad) -> str:
+    n = int(cantidad) if pd.notna(cantidad) else 0
+    if n <= 0:
+        return "Sin estacionamiento"
+    return f"{n} estacionamiento{'s' if n != 1 else ''}"
+
+
+def _format_amoblado(amoblado: bool) -> str:
+    return "Amoblado" if amoblado else "Sin amoblar"
+
+
 def _format_publicacion(fecha_val) -> str:
     # fecha_publicacion_aprox es una aproximación calculada por el scraper a
     # partir de texto relativo ("hace 3 meses"), y queda nula en ~1 de cada 5
@@ -92,7 +110,9 @@ def _card_html(row: pd.Series) -> str:
             <p class="card-location">{_format_ubicacion(row['comuna'], row.get('barrio'))}</p>
             <p class="card-facts">🛏️ {int(row['dormitorios'])} dorm. &nbsp;·&nbsp;
                 🚿 {int(row['banos'])} baños &nbsp;·&nbsp;
-                📐 {row['superficie_util_m2']:.0f} m²</p>
+                📐 {_format_superficie(row['superficie_util_m2'], row.get('superficie_total_m2'))}</p>
+            <p class="card-amenities">🚗 {_format_estacionamientos(row.get('estacionamientos'))} &nbsp;·&nbsp;
+                🛋️ {_format_amoblado(bool(row['amoblado']))}</p>
             <p class="card-price">${_clp(row['precio'])}</p>
             <p class="card-expenses">Gastos comunes: ${_clp(row['gastos_comunes'])}</p>
             <p class="card-published">{_format_publicacion(row.get('fecha_publicacion_aprox'))}</p>
@@ -143,7 +163,9 @@ def _map_point(row: pd.Series) -> dict:
         "ubicacion": _format_ubicacion(row["comuna"], row.get("barrio")),
         "dormitorios": int(row["dormitorios"]),
         "banos": int(row["banos"]),
-        "superficie": f"{row['superficie_util_m2']:.0f}",
+        "superficieTexto": _format_superficie(row["superficie_util_m2"], row.get("superficie_total_m2")),
+        "estacionamientosTexto": _format_estacionamientos(row.get("estacionamientos")),
+        "amobladoTexto": _format_amoblado(bool(row["amoblado"])),
         "precio": _clp(row["precio"]),
         "gastosComunes": _clp(row["gastos_comunes"]),
         "publicado": _format_publicacion(row.get("fecha_publicacion_aprox")),
@@ -191,6 +213,7 @@ def render_map(df: pd.DataFrame) -> None:
   .card-title {{ color: {COLOR_TEXT_TITLE}; font-size: 1.02rem; font-weight: 600; margin: 2px 0 0 0; }}
   .card-location {{ color: {COLOR_TEXT_BODY}; font-size: 0.85rem; margin-bottom: 6px; }}
   .card-facts {{ color: {COLOR_TEXT_BODY}; font-size: 0.88rem; margin-bottom: 6px; }}
+  .card-amenities {{ color: {COLOR_TEXT_BODY}; font-size: 0.88rem; margin-bottom: 6px; }}
   .card-price {{ color: {COLOR_TEXT_TITLE}; font-size: 1.35rem; font-weight: 700; margin-bottom: 0; }}
   .card-expenses {{ color: {COLOR_TEXT_BODY}; font-size: 0.8rem; margin-bottom: 6px; }}
   .card-published {{ color: #9A9A9A; font-size: 0.75rem; margin-bottom: 2px; }}
@@ -227,7 +250,8 @@ function buildCardHtml(d) {{
         </div>
         <p class="card-title">${{d.titulo}}</p>
         <p class="card-location">${{d.ubicacion}}</p>
-        <p class="card-facts">🛏️ ${{d.dormitorios}} dorm. &nbsp;·&nbsp; 🚿 ${{d.banos}} baños &nbsp;·&nbsp; 📐 ${{d.superficie}} m²</p>
+        <p class="card-facts">🛏️ ${{d.dormitorios}} dorm. &nbsp;·&nbsp; 🚿 ${{d.banos}} baños &nbsp;·&nbsp; 📐 ${{d.superficieTexto}}</p>
+        <p class="card-amenities">🚗 ${{d.estacionamientosTexto}} &nbsp;·&nbsp; 🛋️ ${{d.amobladoTexto}}</p>
         <p class="card-price">$${{d.precio}}</p>
         <p class="card-expenses">Gastos comunes: $${{d.gastosComunes}}</p>
         <p class="card-published">${{d.publicado}}</p>
