@@ -3,7 +3,7 @@ Entrenamiento del modelo de PRODUCCIÓN.
 
 No duplica la lógica de modelamiento: carga como módulo (vía importlib, ya
 que su nombre empieza con dígito) el script de investigación del algoritmo
-GANADOR — `04_modelamiento/01_xgboost.py` o `04_modelamiento/02_lightgbm.py`,
+GANADOR — `02_modelos/01_xgboost.py` o `02_modelos/02_lightgbm.py`,
 según lo que haya decidido `seleccionar_algoritmo.py` y quedó registrado en
 `algoritmo_seleccionado.json` — y reutiliza sus funciones
 (optimización de hiperparámetros, bagging, evaluación, SHAP). Solo se carga
@@ -23,22 +23,42 @@ Diferencias respecto al script de investigación:
     base de datos de producción qué predicciones se hicieron con qué
     versión cuando el modelo se reentrene.
   - Guarda el ensamble y sus parámetros en `versiones/{version}/` (no en
-    `04_modelamiento/save/model/`, que es el modelo de investigación).
+    `02_modelos/save/model/`, que es el modelo de investigación).
     Cada versión queda archivada en su propia carpeta (no se sobrescribe),
     para poder recuperar el modelo EXACTO usado en cualquier predicción
     pasada (`predicciones.version_modelo` -> `versiones/{esa versión}/`).
 
-Dataset de entrada: por ahora, el mismo CSV curado que usa el modelo de
-investigación (03_ingenieria_variables/save/.../datos_ingenieria_variables.csv
-+ selected_features.csv). La incorporación de datos nuevos acumulados por el
-pipeline de producción (Parte 2) queda para una futura re-corrida de este
-mismo script, no para esta primera versión.
+Dataset de entrada (`--origen-datos`, por defecto `supabase`):
+
+  - `supabase`: regenera el dataset en el momento corriendo la ingeniería de
+    variables contra la base de PRODUCCIÓN (`ejecutar_pipeline(con=...)`), con
+    los avisos que el pipeline lleva acumulados. Es el modo normal: entrena con
+    los datos actualizados en vez de un CSV congelado.
+  - `csv`: usa el CSV curado tal como esté en disco, sin regenerarlo. Sirve para
+    reproducir un entrenamiento anterior sobre exactamente los mismos datos.
+
+Qué avisos entran al dataset se controla con `--estados` y
+`--meses-max-finalizados` (ver ESTADOS_ENTRENAMIENTO_DEFAULT en
+01_ingenieria_variables.py). No se entrena solo con los 'activo' a propósito:
+esos son, por definición, los que el mercado todavía no absorbió, así que
+sobre-representan unidades caras para su segmento.
+
+ARTEFACTOS DE FEATURES POR VERSIÓN:
+Regenerar el dataset también regenera `niveles_barrio.json` y
+`modelos_superficie/*.pkl`, que NO son solo del entrenamiento: los usa
+`04_ingenieria_variables_produccion.py` en cada inferencia. Como esos archivos
+viven en una ruta global y se sobrescriben, se archiva una copia en
+`versiones/{version}/artefactos_features/` junto al modelo, para poder
+reconstruir después con qué artefactos exactos se entrenó cada versión.
 """
 
+import argparse
 import hashlib
 import importlib.util
 import json
 import pickle
+import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -52,13 +72,13 @@ from sklearn.model_selection import train_test_split
 # ------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+MODELAMIENTO_ROOT = REPO_ROOT / "modelamiento"
 
 ALGORITMO_SELECCIONADO_PATH = SCRIPT_DIR / "algoritmo_seleccionado.json"
 
-MODULOS_INVESTIGACION = {
-    "xgboost": INVESTIGACION_ROOT / "04_modelamiento" / "01_xgboost.py",
-    "lightgbm": INVESTIGACION_ROOT / "04_modelamiento" / "02_lightgbm.py",
+MODULOS_MODELAMIENTO = {
+    "xgboost": MODELAMIENTO_ROOT / "02_modelos" / "01_xgboost.py",
+    "lightgbm": MODELAMIENTO_ROOT / "02_modelos" / "02_lightgbm.py",
 }
 # Atributo bajo el cual cada módulo expone su propia librería de boosting
 # (para poder imprimir su versión sin hardcodear un solo algoritmo).
@@ -73,21 +93,44 @@ def _cargar_algoritmo_seleccionado() -> str:
         )
     seleccion = json.loads(ALGORITMO_SELECCIONADO_PATH.read_text(encoding="utf-8"))
     algoritmo = seleccion["algoritmo"]
-    if algoritmo not in MODULOS_INVESTIGACION:
+    if algoritmo not in MODULOS_MODELAMIENTO:
         raise ValueError(f"Algoritmo desconocido en {ALGORITMO_SELECCIONADO_PATH}: {algoritmo!r}")
     return algoritmo
 
 
-def _cargar_modulo_investigacion(algoritmo: str):
-    ruta = MODULOS_INVESTIGACION[algoritmo]
-    spec = importlib.util.spec_from_file_location(f"modelo_investigacion_{algoritmo}", ruta)
+def _cargar_modulo_modelamiento(algoritmo: str):
+    ruta = MODULOS_MODELAMIENTO[algoritmo]
+    spec = importlib.util.spec_from_file_location(f"modelo_modelamiento_{algoritmo}", ruta)
     modulo = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(modulo)
     return modulo
 
 
 ALGORITMO = _cargar_algoritmo_seleccionado()
-mx = _cargar_modulo_investigacion(ALGORITMO)
+mx = _cargar_modulo_modelamiento(ALGORITMO)
+
+# `db` vive un nivel más arriba (produccion/01_modelo_produccion/) y no es un
+# paquete instalable, así que se agrega esa carpeta al path para poder
+# importarlo. Se hace acá y no arriba porque solo el modo `--origen-datos
+# supabase` lo necesita.
+MODELO_PRODUCCION_ROOT = SCRIPT_DIR.parent
+if str(MODELO_PRODUCCION_ROOT) not in sys.path:
+    sys.path.insert(0, str(MODELO_PRODUCCION_ROOT))
+
+INGENIERIA_VARIABLES_PATH = MODELAMIENTO_ROOT / "01_ingenieria_variables" / "01_ingenieria_variables.py"
+
+
+def _cargar_ingenieria_variables():
+    """Carga 01_ingenieria_variables.py como módulo (su nombre empieza con
+    dígito, así que no admite un `import` normal). Es el MISMO módulo que usa
+    el pipeline de inferencia, para que entrenamiento e inferencia no puedan
+    divergir en la lógica de features."""
+    spec = importlib.util.spec_from_file_location(
+        "ingenieria_variables_entrenamiento", INGENIERIA_VARIABLES_PATH
+    )
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
 
 # ------------------------------------------------------------------
 # CONFIG
@@ -108,6 +151,85 @@ CONTROL_VERSION_PATH = SAVE_DIR / "version_modelo.json"
 # recuperar el modelo EXACTO que se usó en cualquier predicción pasada
 # (predicciones.version_modelo -> versiones/{esa versión}/).
 VERSIONES_DIR = SAVE_DIR / "versiones"
+
+
+# ------------------------------------------------------------------
+# Regeneración del dataset desde la base de PRODUCCIÓN
+# ------------------------------------------------------------------
+def regenerar_dataset_desde_supabase(estados, meses_max_finalizados) -> dict:
+    """
+    Corre la ingeniería de variables contra la base de producción y sobrescribe
+    el CSV curado que después lee `mx.load_dataset`.
+
+    Devuelve un dict con la procedencia del dataset (filas, filtros aplicados,
+    fecha), que se guarda en `parametros_produccion.json` para que quede
+    registrado con qué población se entrenó cada versión - dato que el CSV solo
+    no permite reconstruir, porque se sobrescribe en cada corrida.
+    """
+    import db
+
+    iv = _cargar_ingenieria_variables()
+
+    print(f"Regenerando dataset desde la base de PRODUCCIÓN (Supabase)...")
+    print(f"  estados={tuple(estados)}  meses_max_finalizados={meses_max_finalizados}")
+
+    con = db.conectar_produccion()
+    try:
+        df = iv.ejecutar_pipeline(
+            con=con,
+            estados=tuple(estados),
+            meses_max_antiguedad_finalizados=meses_max_finalizados,
+        )
+    finally:
+        con.close()
+
+    print(f"  -> dataset regenerado: {len(df)} filas, {len(df.columns)} columnas")
+    print(f"  -> guardado en {mx.DATASET_PATH}")
+
+    return {
+        "origen": "supabase",
+        "fecha_regeneracion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "filas": int(len(df)),
+        "estados_incluidos": list(estados),
+        "meses_max_antiguedad_finalizados": meses_max_finalizados,
+        "columna_antiguedad": iv.COLUMNA_ANTIGUEDAD_AVISO,
+    }
+
+
+def archivar_artefactos_features(version_dir: Path) -> list:
+    """
+    Copia a `version_dir/artefactos_features/` los archivos que la ingeniería de
+    variables genera y que la INFERENCIA también usa: `selected_features.csv`,
+    `niveles_barrio.json` y `modelos_superficie/`.
+
+    Por qué: esos tres viven en rutas globales dentro de modelamiento/ y se
+    sobrescriben cada vez que se regenera el dataset, mientras que los modelos
+    quedan archivados por versión. Sin esta copia no hay forma de saber después
+    con qué niveles de barrio o con qué modelos de imputación de superficie se
+    entrenó una versión dada.
+    """
+    destino = version_dir / "artefactos_features"
+    destino.mkdir(parents=True, exist_ok=True)
+
+    origenes = [
+        Path(mx.FEATURES_PATH),
+        Path(mx.DATASET_PATH).parent / "niveles_barrio.json",
+        Path(mx.DATASET_PATH).parent / "modelos_superficie",
+    ]
+
+    archivados = []
+    for origen in origenes:
+        if not origen.exists():
+            print(f"  Advertencia: no existe {origen}, no se archiva.")
+            continue
+        if origen.is_dir():
+            shutil.copytree(origen, destino / origen.name, dirs_exist_ok=True)
+        else:
+            shutil.copy2(origen, destino / origen.name)
+        archivados.append(origen.name)
+
+    print(f"  Artefactos de features archivados en {destino}: {archivados}")
+    return archivados
 
 
 # ------------------------------------------------------------------
@@ -167,7 +289,7 @@ def guardar_control_version(control: dict, control_path: Path = CONTROL_VERSION_
 # en producción (05_prediccion.py) de forma consistente con el test set, en vez de
 # recalcular deciles/terciles de una sola fila (imposible: qcut necesita una
 # distribución). A diferencia de `etiquetar_oportunidades` en
-# 04_modelamiento/01_xgboost.py (que aplica los bordes calculados a ESE
+# 02_modelos/01_xgboost.py (que aplica los bordes calculados a ESE
 # mismo test set y los descarta), acá se GUARDAN los bordes para reaplicarlos
 # después con `pd.cut` sobre avisos que ni siquiera existían al entrenar.
 # ------------------------------------------------------------------
@@ -244,13 +366,50 @@ def split_produccion(df, features, target_col=None, seed: int = SEED):
 # ------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------
-def main():
+def parsear_argumentos(argv=None):
+    iv_defaults = _cargar_ingenieria_variables()
+    parser = argparse.ArgumentParser(
+        description="Entrena el modelo de producción. Por defecto regenera el "
+                    "dataset desde la base de producción (Supabase)."
+    )
+    parser.add_argument(
+        "--origen-datos", choices=("supabase", "csv"), default="supabase",
+        help="supabase: regenera el dataset desde la base de producción (default). "
+             "csv: usa el CSV curado tal como está en disco.",
+    )
+    parser.add_argument(
+        "--estados", nargs="+", default=list(iv_defaults.ESTADOS_ENTRENAMIENTO_DEFAULT),
+        metavar="ESTADO",
+        help="estado_publicacion de los avisos a incluir. "
+             f"Default: {' '.join(iv_defaults.ESTADOS_ENTRENAMIENTO_DEFAULT)}",
+    )
+    parser.add_argument(
+        "--meses-max-finalizados", type=int,
+        default=iv_defaults.MESES_MAX_ANTIGUEDAD_FINALIZADOS_DEFAULT,
+        help="Antigüedad máxima (en meses, sobre fecha_publicacion_aprox) de los avisos "
+             "finalizados. Usar 0 para no aplicar límite. "
+             f"Default: {iv_defaults.MESES_MAX_ANTIGUEDAD_FINALIZADOS_DEFAULT}",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parsear_argumentos(argv)
     np.random.seed(SEED)
 
     lib_boosting = getattr(mx, LIB_ATTR_POR_ALGORITMO[ALGORITMO])
     print(f"Algoritmo seleccionado (Tarea 1, {ALGORITMO_SELECCIONADO_PATH.name}): {ALGORITMO}")
     print(f"Versiones — {ALGORITMO}={lib_boosting.__version__}  optuna={mx.optuna.__version__}  "
           f"numpy={np.__version__}")
+
+    if args.origen_datos == "supabase":
+        # 0 se interpreta como "sin límite" para poder pedirlo desde la CLI,
+        # donde no hay forma natural de pasar None.
+        meses = args.meses_max_finalizados or None
+        procedencia_dataset = regenerar_dataset_desde_supabase(args.estados, meses)
+    else:
+        print(f"Usando el CSV curado sin regenerar: {mx.DATASET_PATH}")
+        procedencia_dataset = {"origen": "csv", "regenerado": False}
 
     features = mx.load_selected_features(mx.FEATURES_PATH)
     df = mx.load_dataset(mx.DATASET_PATH, features)
@@ -289,6 +448,8 @@ def main():
     version_dir = VERSIONES_DIR / version
     version_dir.mkdir(parents=True, exist_ok=True)
 
+    artefactos_archivados = archivar_artefactos_features(version_dir)
+
     # Se guarda un dict (no la lista de modelos "pelada") para que
     # 05_prediccion.py sepa con qué librería fue entrenado el ensamble y
     # pueda elegir la función de predicción correcta (XGBoost y LightGBM
@@ -322,6 +483,10 @@ def main():
         "calibracion_oportunidad": calibracion,
         "dataset_origen": str(mx.DATASET_PATH),
         "features_origen": str(mx.FEATURES_PATH),
+        # Con qué población se entrenó esta versión. El CSV se sobrescribe en
+        # cada regeneración, así que sin esto no queda registro de los filtros.
+        "procedencia_dataset": procedencia_dataset,
+        "artefactos_features_archivados": artefactos_archivados,
     }
     params_path = version_dir / "parametros_produccion.json"
     with open(params_path, "w", encoding="utf-8") as f:

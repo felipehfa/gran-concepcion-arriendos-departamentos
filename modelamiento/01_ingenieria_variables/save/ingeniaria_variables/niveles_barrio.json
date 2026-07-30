@@ -1,0 +1,46 @@
+{
+  "mapa_barrio_a_nivel": {
+    "Altos de Chiguayante - Plaza Chiguayante": 0,
+    "Andalién": 0,
+    "Andalué": 3,
+    "Bajo Tucapel": 1,
+    "Barrio Oriente - Las Tres Pascualas": 4,
+    "Barrio Poniente": 2,
+    "Barrio Universitario": 2,
+    "Brisas del Sol": 1,
+    "Carriel": 4,
+    "Centro de Concepción": 2,
+    "Chiguayante Sur": 1,
+    "Ciudad de Penco": 2,
+    "Collao": 0,
+    "Dichato": 2,
+    "Huertos Familiares": 4,
+    "La Boca": 2,
+    "La Leonera": 0,
+    "Lomas de San Andrés": 4,
+    "Lomas de San Sebastián": 4,
+    "Lonco": 1,
+    "Lorenzo Arenas": 4,
+    "Michaihue": 0,
+    "Pedro de Valdivia": 2,
+    "Pingueral": 2,
+    "Portal San Pedro": 0,
+    "Schaub": 2,
+    "Villa San Pedro - Bayona": 0
+  },
+  "nivel_default": 2,
+  "cortes_valor": [
+    11955.468289604081,
+    12612.012523632016,
+    13589.274345917323,
+    14524.712351979979
+  ],
+  "nombres_niveles": [
+    "muy_barato",
+    "barato",
+    "medio",
+    "alto",
+    "muy_alto"
+  ],
+  "k_suavizado": 20
+}

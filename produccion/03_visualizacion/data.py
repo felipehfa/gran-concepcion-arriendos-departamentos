@@ -13,8 +13,8 @@ import streamlit as st
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRODUCCION_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = PRODUCCION_ROOT.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+MODELAMIENTO_ROOT = REPO_ROOT / "modelamiento"
+INGENIERIA_VARIABLES_PATH = MODELAMIENTO_ROOT / "01_ingenieria_variables" / "01_ingenieria_variables.py"
 
 
 def _bd_string() -> str:

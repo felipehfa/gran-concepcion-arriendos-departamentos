@@ -35,7 +35,7 @@ import db
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# Mismo mapeo que `01_obtener_datos/03_vulnerabilidad_socioterritorial.py`:
+# Mismo mapeo que `scrapers_base/03_vulnerabilidad_socioterritorial.py`:
 # slug de comuna (como en la columna `comuna` de producción) -> nombre tal
 # como aparece en el shapefile (columna "Comuna", mayúsculas sin tildes). Se
 # mantiene acá — aunque esta etapa ya no lee el shapefile — porque

@@ -40,9 +40,9 @@ log = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
-FEATURES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "save" / "seleccion_variables" / "selected_features.csv"
+MODELAMIENTO_ROOT = REPO_ROOT / "modelamiento"
+INGENIERIA_VARIABLES_PATH = MODELAMIENTO_ROOT / "01_ingenieria_variables" / "01_ingenieria_variables.py"
+FEATURES_PATH = MODELAMIENTO_ROOT / "01_ingenieria_variables" / "save" / "seleccion_variables" / "selected_features.csv"
 
 
 def _cargar_modulo_ingenieria_variables():
@@ -71,21 +71,47 @@ MAX_ESTACIONAMIENTOS = 15
 # ------------------------------------------------------------------
 # Pendientes
 # ------------------------------------------------------------------
-def obtener_avisos_pendientes(con) -> pd.DataFrame:
-    """Avisos departamento con detalle scrapeado y sin predicción todavía."""
-    return pd.read_sql_query("""
-        SELECT
-            a.id_aviso, a.titulo, a.comuna, a.banos, a.superficie_m2,
-            d.dormitorios, d.estacionamientos, d.gastos_comunes,
-            d.piscina, d.ascensor, d.cantidad_paraderos, d.cantidad_colegios,
-            d.distancia_centro_comuna_m, d.distancia_centro_concepcion_m,
-            d.piso_unidad, d.superficie_util_m2, d.superficie_total_m2,
-            d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano, d.c_ig_com, d.hog_uv,
-            d.latitud, d.longitud,
-            d.barrio, d.bodegas, d.conserjeria, d.estacionamiento_visitas,
-            d.condominio_cerrado, d.cantidad_jardines_infantiles,
-            d.cantidad_supermercados, d.cantidad_plazas, d.cantidad_farmacias,
-            d.cantidad_universidades, d.cantidad_centros_comerciales, d.cantidad_clinicas
+COLUMNAS_AVISOS_PENDIENTES = """
+    a.id_aviso, a.titulo, a.comuna, a.banos, a.superficie_m2,
+    d.dormitorios, d.estacionamientos, d.gastos_comunes,
+    d.piscina, d.ascensor, d.cantidad_paraderos, d.cantidad_colegios,
+    d.distancia_centro_comuna_m, d.distancia_centro_concepcion_m,
+    d.piso_unidad, d.superficie_util_m2, d.superficie_total_m2,
+    d.antiguedad_anos, d.rank_nac, d.pob_rsh_uv, d.p_urbano, d.c_ig_com, d.hog_uv,
+    d.latitud, d.longitud,
+    d.barrio, d.bodegas, d.conserjeria, d.estacionamiento_visitas,
+    d.condominio_cerrado, d.cantidad_jardines_infantiles,
+    d.cantidad_supermercados, d.cantidad_plazas, d.cantidad_farmacias,
+    d.cantidad_universidades, d.cantidad_centros_comerciales, d.cantidad_clinicas
+"""
+
+
+def obtener_avisos_pendientes(con, estados: tuple = None) -> pd.DataFrame:
+    """
+    Por defecto (`estados=None`): avisos departamento con detalle scrapeado y
+    SIN predicción todavía en ninguna versión (LEFT JOIN predicciones ...
+    WHERE p.id_aviso IS NULL) - el caso normal de cada corrida del
+    orquestador, que solo necesita puntuar avisos nuevos.
+
+    Si se pasa `estados` (ej. ('activo', 'pausado')): ignora si ya tienen
+    predicción y trae TODOS los avisos departamento en esos estados. Uso:
+    re-aplicar un modelo recién promovido sobre la base completa. Acá NO se
+    hace el LEFT JOIN contra `predicciones` -a propósito-: un aviso ya
+    predicho por una versión anterior tiene una fila en esa tabla, y unirla
+    multiplicaría esa fila de `pendientes` por cada versión con la que ya se
+    predijo (predicciones.UNIQUE es (id_aviso, version_modelo), no
+    id_aviso solo).
+    """
+    if estados is not None:
+        return pd.read_sql_query(f"""
+            SELECT {COLUMNAS_AVISOS_PENDIENTES}
+            FROM avisos a
+            JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
+            WHERE a.tipo_propiedad = 'departamento' AND a.estado_publicacion = ANY(%s)
+        """, con, params=(list(estados),))
+
+    return pd.read_sql_query(f"""
+        SELECT {COLUMNAS_AVISOS_PENDIENTES}
         FROM avisos a
         JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
         LEFT JOIN predicciones p ON a.id_aviso = p.id_aviso
@@ -128,12 +154,19 @@ def aplicar_filtros_sanidad(df: pd.DataFrame) -> tuple:
 # ------------------------------------------------------------------
 # Población de referencia
 # ------------------------------------------------------------------
-def construir_poblacion_referencia(con_original) -> pd.DataFrame:
+def construir_poblacion_referencia(con_produccion) -> pd.DataFrame:
     """
-    Dataset histórico ya limpio/imputado (datos_ingenieria_variables.csv) +
-    latitud/longitud/comuna recuperadas con un SELECT de solo lectura contra
-    la base original (esas columnas se descartan del CSV final, pero acá
+    Dataset ya limpio/imputado (datos_ingenieria_variables.csv) +
+    latitud/longitud/comuna recuperadas con un SELECT de solo lectura contra la
+    base de PRODUCCIÓN (esas columnas se descartan del CSV final, pero acá
     hacen falta para las búsquedas geográficas).
+
+    Hasta 2026-07-29 estas coordenadas se leían de la base SQLite de
+    investigación, que ya no existe. Supabase es además una fuente mejor: tiene
+    2607 departamentos con coordenadas contra 1658 de la SQLite, y se mantiene
+    al día con cada re-scrapeo. El `merge` con el CSV es inner, así que la
+    población de referencia sigue siendo exactamente la del CSV - lo único que
+    aporta esta consulta son las columnas geográficas.
     """
     df_csv = pd.read_csv(iv.RUTA_SALIDA_CSV_DEFAULT)
 
@@ -142,7 +175,7 @@ def construir_poblacion_referencia(con_original) -> pd.DataFrame:
         FROM avisos a
         JOIN avisos_detalle d ON a.id_aviso = d.id_aviso
         WHERE a.tipo_propiedad = 'departamento'
-    """, con_original)
+    """, con_produccion)
 
     referencia = df_csv.merge(coords_comuna, on="id_aviso", how="inner")
     referencia["latitud"] = pd.to_numeric(referencia["latitud"], errors="coerce")
@@ -326,7 +359,7 @@ def normalizar_columnas_nuevas(df: pd.DataFrame) -> pd.DataFrame:
     df["condominio_cerrado"] = pd.to_numeric(df["condominio_cerrado"], errors="coerce").fillna(0).astype(int)
 
     # nivel_barrio: diccionario barrio->nivel ya calculado en investigación
-    # (03_ingenieria_variables/save/ingeniaria_variables/niveles_barrio.json).
+    # (01_ingenieria_variables/save/ingeniaria_variables/niveles_barrio.json).
     # Un barrio ausente o no visto en el diccionario cae a NIVEL_BARRIO_DEFAULT.
     df["nivel_barrio"] = df["barrio"].map(MAPA_BARRIO_A_NIVEL).fillna(NIVEL_BARRIO_DEFAULT).astype(int)
 
@@ -337,7 +370,11 @@ def normalizar_columnas_nuevas(df: pd.DataFrame) -> pd.DataFrame:
 # Construcción de las features seleccionadas (30 actualmente, leídas
 # dinámicamente desde selected_features.csv)
 # ------------------------------------------------------------------
-def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
+def construir_features_produccion(con_produccion, estados: tuple = None) -> pd.DataFrame:
+    """`estados` se pasa tal cual a `obtener_avisos_pendientes` (ver ahí): con
+    el default (None) calcula features solo para avisos sin predicción
+    todavía; con un tuple de estados, para TODOS los avisos en esos estados,
+    tengan o no predicción ya."""
     # 'gastos_comunes' viaja además de FEATURES_ESPERADAS aunque ya no sea
     # feature del modelo (es uno de los sumandos del target, costo_total_clp
     # = precio_clp + gastos_comunes — usarla como feature sería fuga de
@@ -346,8 +383,9 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
     # predicción.
     columnas_salida = [ID_COL] + FEATURES_ESPERADAS + ["gastos_comunes"]
 
-    pendientes = obtener_avisos_pendientes(con_produccion)
-    log.info(f"{len(pendientes)} avisos departamento pendientes de calcular features.")
+    pendientes = obtener_avisos_pendientes(con_produccion, estados=estados)
+    log.info(f"{len(pendientes)} avisos departamento "
+             f"{'en ' + str(estados) if estados else 'pendientes'} de calcular features.")
     if pendientes.empty:
         return pd.DataFrame(columns=columnas_salida)
 
@@ -358,7 +396,7 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
     if pendientes.empty:
         return pd.DataFrame(columns=columnas_salida)
 
-    referencia_df = construir_poblacion_referencia(con_original)
+    referencia_df = construir_poblacion_referencia(con_produccion)
     referencia = Referencia(referencia_df)
 
     pendientes = imputar_superficies(pendientes)
@@ -420,12 +458,10 @@ def construir_features_produccion(con_produccion, con_original) -> pd.DataFrame:
 
 if __name__ == "__main__":
     con_produccion = db.conectar_produccion()
-    con_original = db.conectar_original()
 
-    features_df = construir_features_produccion(con_produccion, con_original)
+    features_df = construir_features_produccion(con_produccion)
 
     con_produccion.close()
-    con_original.close()
 
     log.info(f"Features calculadas para {len(features_df)} avisos.")
     if not features_df.empty:

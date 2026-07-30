@@ -188,7 +188,6 @@ def chequeo_sanidad_grilla(con, n_corridas: int = N_CORRIDAS_CONSECUTIVAS_SIN_NU
 # ------------------------------------------------------------------
 def main():
     con_produccion = db.conectar_produccion()
-    con_original = db.conectar_original()
 
     id_corrida = crear_corrida(con_produccion)
     id_corrida_holder = _EtapaActual()
@@ -217,7 +216,7 @@ def main():
         log.info("Iniciando etapa: scraper_grilla")
         t0 = time.time()
         grilla = _cargar_modulo("produccion_scraper_grilla", SCRIPT_DIR / "01_scraper_grilla_incremental.py")
-        resumen = grilla.scrapear_grilla_incremental(con_produccion, con_original)
+        resumen = grilla.scrapear_grilla_incremental(con_produccion)
         log.info(f"Etapa scraper_grilla completada en {time.time()-t0:.1f}s: {resumen}")
         r["avisos_nuevos_grilla"] = resumen["total_nuevos"]
         r["paginas_recorridas_grilla"] = resumen["paginas_recorridas"]
@@ -248,7 +247,7 @@ def main():
         log.info("Iniciando etapa: variables")
         t0 = time.time()
         variables = _cargar_modulo("produccion_variables", SCRIPT_DIR / "04_ingenieria_variables_produccion.py")
-        features_df = variables.construir_features_produccion(con_produccion, con_original)
+        features_df = variables.construir_features_produccion(con_produccion)
         log.info(f"Etapa variables completada en {time.time()-t0:.1f}s: "
                   f"{len(features_df)} avisos con features calculadas")
 
@@ -256,7 +255,7 @@ def main():
         log.info("Iniciando etapa: prediccion")
         t0 = time.time()
         prediccion = _cargar_modulo("produccion_prediccion", SCRIPT_DIR / "05_prediccion.py")
-        resumen = prediccion.generar_predicciones(con_produccion, con_original, features_df=features_df)
+        resumen = prediccion.generar_predicciones(con_produccion, features_df=features_df)
         log.info(f"Etapa prediccion completada en {time.time()-t0:.1f}s: {resumen}")
         r["version_modelo_usada"] = resumen["version_modelo"]
 
@@ -286,7 +285,6 @@ def main():
         log.info(f"=== Fin de corrida #{id_corrida}: resultado={r['resultado']} ===")
 
         con_produccion.close()
-        con_original.close()
 
     return r["resultado"]
 

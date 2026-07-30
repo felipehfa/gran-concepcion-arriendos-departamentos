@@ -1,4 +1,4 @@
-# Playwright queda excluido a propósito: en 01_obtener_datos/02_scraper_detalle.py
+# Playwright queda excluido a propósito: en scrapers_base/02_scraper_detalle.py
 # el import vive dentro de main_fallback_playwright() (import perezoso, solo se
 # dispara con --fallback-playwright) y la ruta principal usada en producción es
 # 100% requests, así que no debe ser una dependencia obligatoria acá.

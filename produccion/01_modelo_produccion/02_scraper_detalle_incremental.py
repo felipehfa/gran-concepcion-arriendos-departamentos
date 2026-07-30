@@ -1,7 +1,7 @@
 """
 Scraper de DETALLE incremental — pipeline de producción.
 
-No duplica el parsing HTML/JSON: carga `01_obtener_datos/02_scraper_detalle.py`
+No duplica el parsing HTML/JSON: carga `scrapers_base/02_scraper_detalle.py`
 como módulo (vía importlib) y reutiliza su ruta principal basada en requests
 - en particular `obtener_detalle_aviso` (fetch + reintento + extracción
 completa en un solo llamado), además de `extraer_json_estado_pagina`,
@@ -87,9 +87,8 @@ MAX_AVISOS_RECHEQUEO_POR_CORRIDA = 200
 MAX_INTENTOS_FALLIDOS_DETALLE = 5
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-SCRAPER_DETALLE_ORIGINAL_PATH = INVESTIGACION_ROOT / "01_obtener_datos" / "02_scraper_detalle.py"
+SCRAPERS_BASE_DIR = SCRIPT_DIR / "scrapers_base"
+SCRAPER_DETALLE_ORIGINAL_PATH = SCRAPERS_BASE_DIR / "02_scraper_detalle.py"
 
 
 def _cargar_modulo_scraper_detalle():
@@ -184,7 +183,7 @@ def extraer_estado_publicacion(estado: dict) -> str:
 
 # ------------------------------------------------------------------
 # Conversión de tipos — misma semántica que
-# 03_ingenieria_variables/01_ingenieria_variables.py sobre estos campos
+# 01_ingenieria_variables/01_ingenieria_variables.py sobre estos campos
 # (pd.to_numeric directo, sin separador de miles chileno; "Sí"/"No" -> 1/0,
 # ausente -> NULL, no 0 — la imputación queda para la etapa de variables).
 # EXCEPCIÓN: gastos_comunes no sigue esta regla genérica, ver
@@ -457,7 +456,7 @@ def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
     no simplemente "no quedó activo", porque un pausado que sigue pausado no
     es un cambio), 'no_disponible', 'captcha' o 'error'.
 
-    Usa la ruta principal (requests) de 01_obtener_datos/02_scraper_detalle.py
+    Usa la ruta principal (requests) de scrapers_base/02_scraper_detalle.py
     vía `sd.obtener_detalle_aviso`, que ya incluye reintento ante fallos
     transitorios DENTRO de esta misma corrida. Si aun así devuelve "error",
     se suma 1 al contador `intentos_fallidos_detalle` de este aviso (fallo

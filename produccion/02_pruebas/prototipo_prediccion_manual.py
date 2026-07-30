@@ -69,7 +69,7 @@ COMUNA = "concepcion-biobio"   # una de: concepcion-biobio, talcahuano-biobio,
                                # chiguayante-biobio, penco-biobio, tome-biobio,
                                # coronel-biobio, hualqui-biobio, lota-biobio
 BARRIO = ""                    # nombre de barrio tal como en niveles_barrio.json
-                               # (03_ingenieria_variables/save/ingeniaria_variables/
+                               # (01_ingenieria_variables/save/ingeniaria_variables/
                                # niveles_barrio.json); "" o cualquier valor no
                                # reconocido cae al nivel por defecto
 
@@ -119,7 +119,7 @@ CANTIDAD_CLINICAS = 0               # int, >= 0
 
 # ══════════════════════════════════════════════════════════════════════════
 # Distancias al centro (duplica COMUNA_CENTROS/haversine de
-# 01_obtener_datos/02_scraper_detalle.py::calcular_distancias_centro - no se
+# scrapers_base/02_scraper_detalle.py::calcular_distancias_centro - no se
 # importa ese archivo completo solo por esta constante geográfica estable,
 # para no arrastrar sus dependencias de scraping (requests/bs4/lxml).)
 # ══════════════════════════════════════════════════════════════════════════
@@ -176,8 +176,8 @@ def resolver_vulnerabilidad_puntual(con_produccion, referencia, lat: float, lon:
 # referencia y llamarla directo, sin pasar por `construir_features_produccion`
 # (que además hace I/O de BD de avisos pendientes que no aplica acá).
 # ══════════════════════════════════════════════════════════════════════════
-def construir_fila_features(con_produccion, con_original, features_esperadas: list) -> pd.DataFrame:
-    referencia_df = ivp.construir_poblacion_referencia(con_original)
+def construir_fila_features(con_produccion, features_esperadas: list) -> pd.DataFrame:
+    referencia_df = ivp.construir_poblacion_referencia(con_produccion)
     referencia = ivp.Referencia(referencia_df)
 
     precio_m2_sector, tiene_comparables = referencia.precio_m2_sector(LATITUD, LONGITUD)
@@ -274,13 +274,11 @@ def nivel_confianza_de(cv_ensamble: float, calibracion: dict) -> str:
 def predecir_propiedad_manual() -> dict:
     modelo_info = pred.cargar_modelo_y_calibracion()
     con_produccion = db.conectar_produccion()
-    con_original = db.conectar_original()
 
     try:
-        X = construir_fila_features(con_produccion, con_original, modelo_info["features"])
+        X = construir_fila_features(con_produccion, modelo_info["features"])
     finally:
         con_produccion.close()
-        con_original.close()
 
     pred_matrix = modelo_info["predict_ensemble_matrix"](modelo_info["models"], X)
     costo_total_predicho = float(pred_matrix.mean(axis=0)[0])

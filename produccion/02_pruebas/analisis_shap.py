@@ -8,7 +8,7 @@ propio set de test (85/15, seed=42 — igual que en 01_entrenar_modelo_produccio
 
 `parametros_produccion.json` ya trae un `shap_importance` (magnitud promedio,
 |contribución| media en CLP por feature — ver `compute_shap_native` en
-`04_modelamiento/02_lightgbm.py`), calculado con el mismo TreeSHAP nativo de
+`02_modelos/02_lightgbm.py`), calculado con el mismo TreeSHAP nativo de
 LightGBM (`Booster.predict(..., pred_contrib=True)`, exacto para árboles, sin
 depender de la librería externa `shap`). Este script reutiliza esa misma
 técnica pero SIN colapsar a valor absoluto, para poder estimar además la

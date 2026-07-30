@@ -37,19 +37,27 @@ ETIQUETA_COLORS = {
 
 ETIQUETA_ORDER = {"oportunidad": 0, "precio_de_mercado": 1, "caro": 2}
 
+# Los 3 valores tienen que coincidir EXACTO con el CHECK de nivel_confianza en
+# db.py: ('alta confianza', 'confianza media', 'baja confianza') - la tercera
+# NO sigue el mismo orden "adjetivo confianza" que las otras dos. Antes decía
+# "confianza baja" (invertido) en estos 4 dicts: como nunca coincidía con
+# ningún valor real de la columna, los .get(confianza, default) de abajo
+# siempre caían al fallback para avisos de confianza baja (símbolo vacío,
+# color gris genérico en vez de COLOR_CONFIANZA_BAJA, orden 99 en vez de 2) -
+# bug descubierto el 2026-07-30 junto con el mismo typo en filters.py.
 CONFIANZA_LABELS = {
     "alta confianza": "Alta",
     "confianza media": "Media",
-    "confianza baja": "Baja",
+    "baja confianza": "Baja",
 }
 
 CONFIANZA_COLORS = {
     "alta confianza": COLOR_CONFIANZA_ALTA,
     "confianza media": COLOR_CONFIANZA_MEDIA,
-    "confianza baja": COLOR_CONFIANZA_BAJA,
+    "baja confianza": COLOR_CONFIANZA_BAJA,
 }
 
-CONFIANZA_ORDER = {"alta confianza": 0, "confianza media": 1, "confianza baja": 2}
+CONFIANZA_ORDER = {"alta confianza": 0, "confianza media": 1, "baja confianza": 2}
 
 # Círculo con relleno progresivo (lleno > mitad > vacío): se ve consistente
 # entre fuentes, a diferencia de una "media estrella" que muchas fuentes
@@ -57,7 +65,7 @@ CONFIANZA_ORDER = {"alta confianza": 0, "confianza media": 1, "confianza baja": 
 CONFIANZA_SYMBOLS = {
     "alta confianza": "●",
     "confianza media": "◐",
-    "confianza baja": "○",
+    "baja confianza": "○",
 }
 
 

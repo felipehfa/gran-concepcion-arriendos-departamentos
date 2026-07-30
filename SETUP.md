@@ -20,7 +20,7 @@ una (probado con Python 3.11):
 | Ingeniería de variables           | `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn`            |
 | Selección de variables            | `pandas`, `numpy`, `xgboost`, `optuna`, `scikit-learn`             |
 | Modelamiento                      | `pandas`, `numpy`, `xgboost`, `lightgbm`, `optuna`, `scikit-learn`, `scipy` |
-| Visualización (`produccion/03_visualizacion/`) | `streamlit`, `folium`, `streamlit-folium`, `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn` — las últimas cuatro porque `data.py` importa dinámicamente `investigacion/03_ingenieria_variables/01_ingenieria_variables.py` (ver sección 3) |
+| Visualización (`produccion/03_visualizacion/`) | `streamlit`, `folium`, `streamlit-folium`, `pandas`, `numpy`, `requests`, `joblib`, `scikit-learn` — las últimas cuatro porque `data.py` importa dinámicamente `modelamiento/01_ingenieria_variables/01_ingenieria_variables.py` (ver sección 3) |
 
 Instalación sugerida (sin versiones pineadas, ya que no existen en el repo):
 
@@ -41,50 +41,75 @@ navegador). Solo instálalo si vas a usar la ruta de respaldo de `02_scraper_det
 
 ## 2. Cómo correrlo
 
-### 2.1. Camino rápido — usar los datos ya incluidos
+> **Desde el 2026-07-29 no hay dos stacks de datos.** Antes existía una base SQLite propia de
+> investigación (`avisos_gran_concepcion.db`) que se llenaba corriendo los scrapers a mano. Se
+> retiró: **todo lee de Supabase**, así que estos pasos necesitan `BD_STRING` configurado
+> (sección 3). La adquisición de datos la hace el orquestador de producción, no un paso manual.
 
-Si solo quieres reproducir la ingeniería de variables y el modelamiento (sin volver a
-scrapear), corre en orden desde la raíz del repo:
+### 2.1. Reproducir la ingeniería de variables y el modelamiento
 
-```bash
-python investigacion/03_ingenieria_variables/01_ingenieria_variables.py
-python investigacion/03_ingenieria_variables/02_seleccion_variables.py
-python investigacion/04_modelamiento/01_xgboost.py   # entrenamiento + etiquetado oportunidad/caro
-python investigacion/04_modelamiento/02_lightgbm.py  # entrenamiento + etiquetado oportunidad/caro
-```
-
-### 2.2. Camino completo — scraping desde cero
+Desde la raíz del repo, en orden:
 
 ```bash
-# 1. Grilla de búsqueda (requests + BeautifulSoup, sin navegador)
-python investigacion/01_obtener_datos/01_scraper_grilla.py
+# 1. Construye el dataset leyendo de Supabase y lo guarda en
+#    modelamiento/01_ingenieria_variables/save/ingeniaria_variables/
+python modelamiento/01_ingenieria_variables/01_ingenieria_variables.py
 
-# 2. Detalle de cada aviso (requests, sin navegador - más sensible a bloqueo que
-#    la grilla por el volumen de visitas, aunque no se ha observado bloqueo en la práctica).
-#    Pensado para correr en tandas vía cron, no de una sola sentada
-#    (ver LIMITE_POR_CORRIDA y COOLDOWN_TRAS_CAPTCHA_MINUTOS en el script).
-python investigacion/01_obtener_datos/02_scraper_detalle.py
+# 2. Selección de variables sobre ese dataset -> selected_features.csv
+python modelamiento/01_ingenieria_variables/02_seleccion_variables.py
 
-# 2b. Solo si la ruta principal empezara a bloquearse de forma persistente (no
-#     observado hasta ahora) o necesitas resolver un CAPTCHA a mano: ruta de
-#     respaldo con Playwright (requiere pip install playwright playwright-stealth
-#     && playwright install chromium - ver sección 1).
-# python investigacion/01_obtener_datos/02_scraper_detalle.py --fallback-playwright
-
-# 3. Cruce geoespacial con el índice de vulnerabilidad socioterritorial (IGVUST).
-#    Requiere el shapefile 202505_IGVUST_UV_cuartil.(shp/dbf/shx/prj) en
-#    investigacion/01_obtener_datos/datos_vulnerabilidad/ — NO está incluido en el repo
-#    (ver nota más abajo).
-python investigacion/01_obtener_datos/03_vulnerabilidad_socioterritorial.py
-
-# 4-6. Igual que el camino rápido (2.1)
+# 3. Entrenamiento + etiquetado oportunidad/caro (elegí uno)
+python modelamiento/02_modelos/01_xgboost.py
+python modelamiento/02_modelos/02_lightgbm.py
 ```
+
+> **Cuidado con los artefactos compartidos**: el paso 1 sobrescribe `niveles_barrio.json` y
+> `modelos_superficie/*.pkl`, y el paso 2 sobrescribe `selected_features.csv` — los tres los lee
+> **el pipeline de producción en cada inferencia**. El modelo desplegado espera un set de
+> features exacto (`entrenamiento/versiones/{version}/parametros_produccion.json`); si el dataset
+> cambió de tamaño y corrés el paso 2 con los defaults, la selección puede dar un set distinto y
+> la próxima inferencia falla hasta reentrenar (02_seleccion_variables.py avisa esto si detecta un
+> modelo desplegado). Si estás explorando (probando filtros de población, por ejemplo) y no querés
+> tocarle los artefactos al modelo desplegado: para el paso 1, importá `ejecutar_pipeline` y
+> redirigí las salidas con `ruta_salida_csv`, `ruta_salida_niveles_barrio` y
+> `ruta_modelos_superficie`; para el paso 2, pasale a `run_feature_selection` un `output_dir`
+> propio.
+
+### 2.2. Reentrenar el modelo de producción
+
+Es el camino recomendado: regenera el dataset desde Supabase y entrena, versionando el modelo y
+archivando los artefactos con los que se entrenó.
+
+```bash
+python produccion/01_modelo_produccion/entrenamiento/01_entrenar_modelo_produccion.py \
+    --origen-datos supabase --estados activo pausado finalizado --meses-max-finalizados 3
+```
+
+Los filtros de población son parametrizables para poder comparar configuraciones. **No entrenes solo
+con `activo`**: son por definición los avisos que el mercado todavía no absorbió, así que
+sobre-representan unidades caras para su segmento, y además dan menos filas (1414) que incluir los
+finalizados recientes (~2430). El límite de antigüedad se evalúa sobre `fecha_publicacion_aprox`.
+
+### 2.3. Scraping
+
+Lo corre el orquestador de producción cada 4h (`.github/workflows/orquestador.yml`), y también se
+puede disparar a mano con `workflow_dispatch`. Localmente:
+
+```bash
+python produccion/01_modelo_produccion/00_orquestador.py
+```
+
+Los scrapers base viven en `produccion/01_modelo_produccion/scrapers_base/` (el pipeline los importa
+vía `importlib` para no duplicar el parsing HTML/JSON). Sus `main()` standalone son legacy:
+escribían a la base SQLite que ya no existe.
+
+El cruce geoespacial de vulnerabilidad lo hace la etapa `03_vulnerabilidad_produccion.py` del
+orquestador contra la tabla `poligonos_vulnerabilidad_uv` de Supabase, que ya está poblada — solo
+necesitás el shapefile si querés regenerar ese cruce desde cero.
 
 > **Nota sobre el shapefile de vulnerabilidad**: la carpeta
-> `investigacion/01_obtener_datos/datos_vulnerabilidad/` está excluida del repo vía `.gitignore`
-> (dato pesado de origen externo). La base de datos ya incluye las tablas `vulnerabilidad_uv` y
-> `avisos_igvust` resueltas de una corrida previa, así que solo necesitas el shapefile si quieres
-> **regenerar ese cruce desde cero** (por ejemplo, tras scrapear avisos nuevos).
+> `produccion/01_modelo_produccion/scrapers_base/datos_vulnerabilidad/` está excluida del repo vía
+> `.gitignore` (dato pesado de origen externo).
 
 > **Nota sobre el scraping**: revisa el `robots.txt` / Términos de Uso del sitio antes de correr
 > los scrapers a gran escala, y no redistribuyas contenido con derechos de terceros (fotos,
@@ -158,7 +183,7 @@ streamlit run app.py
 
 `requirements.txt` incluye, además de `streamlit`/`folium`/`streamlit-folium`/`pandas`/`psycopg2-binary`,
 `numpy`/`requests`/`joblib`/`scikit-learn`: son transitivas de
-`investigacion/03_ingenieria_variables/01_ingenieria_variables.py`, que `data.py` importa
+`modelamiento/01_ingenieria_variables/01_ingenieria_variables.py`, que `data.py` importa
 dinámicamente — sin ellas el deploy falla con `ModuleNotFoundError` al cargar ese módulo
 (Streamlit Cloud solo instala lo declarado en este `requirements.txt`, no las dependencias de las
 demás etapas del pipeline).

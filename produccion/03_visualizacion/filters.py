@@ -26,7 +26,7 @@ def _default_filters(df: pd.DataFrame) -> dict:
         "f_etiqueta_caro": True,
         "f_confianza_alta confianza": True,
         "f_confianza_confianza media": True,
-        "f_confianza_confianza baja": True,
+        "f_confianza_baja confianza": True,
         "f_amenity_amoblado": False,
         "f_amenity_piscina": False,
         "f_amenity_ascensor": False,
@@ -97,7 +97,7 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         st.markdown("**Nivel de confianza**")
         st.checkbox("Alta", key="f_confianza_alta confianza")
         st.checkbox("Media", key="f_confianza_confianza media")
-        st.checkbox("Baja", key="f_confianza_confianza baja")
+        st.checkbox("Baja", key="f_confianza_baja confianza")
 
         with st.expander("Más filtros"):
             for col, label in AMENITY_COLUMNS.items():
@@ -141,8 +141,19 @@ def apply_atributo_filters(df: pd.DataFrame) -> pd.DataFrame:
     }
     out = out[out["etiqueta"].isin(etiquetas_selected)]
 
+    # Los 3 valores literales tienen que coincidir EXACTO con el CHECK de
+    # nivel_confianza en db.py: ('alta confianza', 'confianza media',
+    # 'baja confianza') - la tercera NO sigue el mismo orden "adjetivo
+    # confianza"/"confianza adjetivo" que las otras dos. Antes decía
+    # "confianza baja" (invertido) acá: como ese string nunca coincidía con
+    # ningún valor real de la columna, TODOS los avisos con confianza baja
+    # quedaban excluidos del buscador por defecto, sin importar el estado del
+    # checkbox "Baja" (que sí usaba la key correcta, pero el valor con el que
+    # se comparaba estaba mal) - bug descubierto el 2026-07-30 al notar que la
+    # cantidad de "departamentos encontrados" subía o bajaba según qué tan
+    # segura estaba el modelo vigente, no según los datos.
     confianzas_selected = {
-        c for c in ["alta confianza", "confianza media", "confianza baja"] if s[f"f_confianza_{c}"]
+        c for c in ["alta confianza", "confianza media", "baja confianza"] if s[f"f_confianza_{c}"]
     }
     out = out[out["nivel_confianza"].isin(confianzas_selected)]
 

@@ -45,14 +45,14 @@ log = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+MODELAMIENTO_ROOT = REPO_ROOT / "modelamiento"
 ENTRENAMIENTO_DIR = SCRIPT_DIR / "entrenamiento"
 
-MODULOS_INVESTIGACION = {
-    "xgboost": INVESTIGACION_ROOT / "04_modelamiento" / "01_xgboost.py",
-    "lightgbm": INVESTIGACION_ROOT / "04_modelamiento" / "02_lightgbm.py",
+MODULOS_MODELAMIENTO = {
+    "xgboost": MODELAMIENTO_ROOT / "02_modelos" / "01_xgboost.py",
+    "lightgbm": MODELAMIENTO_ROOT / "02_modelos" / "02_lightgbm.py",
 }
-INGENIERIA_VARIABLES_PATH = INVESTIGACION_ROOT / "03_ingenieria_variables" / "01_ingenieria_variables.py"
+INGENIERIA_VARIABLES_PATH = MODELAMIENTO_ROOT / "01_ingenieria_variables" / "01_ingenieria_variables.py"
 INGENIERIA_VARIABLES_PRODUCCION_PATH = SCRIPT_DIR / "04_ingenieria_variables_produccion.py"
 
 
@@ -63,10 +63,10 @@ def _cargar_modulo(nombre: str, ruta: Path):
     return modulo
 
 
-def _cargar_modulo_investigacion(algoritmo: str):
-    if algoritmo not in MODULOS_INVESTIGACION:
+def _cargar_modulo_modelamiento(algoritmo: str):
+    if algoritmo not in MODULOS_MODELAMIENTO:
         raise ValueError(f"Algoritmo desconocido en parametros_produccion.json: {algoritmo!r}")
-    return _cargar_modulo(f"modelo_investigacion_{algoritmo}", MODULOS_INVESTIGACION[algoritmo])
+    return _cargar_modulo(f"modelo_modelamiento_{algoritmo}", MODULOS_MODELAMIENTO[algoritmo])
 
 
 iv = _cargar_modulo("ingenieria_variables_original", INGENIERIA_VARIABLES_PATH)
@@ -106,7 +106,7 @@ def cargar_modelo_y_calibracion() -> dict:
             f"algoritmo={modelo_guardado['algoritmo']!r}."
         )
 
-    mx = _cargar_modulo_investigacion(algoritmo)
+    mx = _cargar_modulo_modelamiento(algoritmo)
 
     return {
         "models": modelo_guardado["modelos"],
@@ -173,7 +173,7 @@ def guardar_prediccion(con, id_aviso: str, version_modelo: str, costo_total_pred
 # ------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------
-def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame = None) -> dict:
+def generar_predicciones(con_produccion, features_df: pd.DataFrame = None) -> dict:
     """
     Si `features_df` ya viene calculado (ej. por el orquestador, que corre
     la etapa de variables por separado para loggearla como su propia etapa),
@@ -184,7 +184,7 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
     log.info(f"Modelo vigente: {modelo_info['version_modelo']}")
 
     if features_df is None:
-        features_df = ivp.construir_features_produccion(con_produccion, con_original)
+        features_df = ivp.construir_features_produccion(con_produccion)
     if features_df.empty:
         log.info("No hay avisos pendientes de predicción.")
         return {"predicciones_generadas": 0, "avisos_saltados_sin_precio": 0,
@@ -202,6 +202,23 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
     # viaja en features_df como columna pass-through (no es feature del
     # modelo, ver 04_ingenieria_variables_produccion.py).
     features_df["costo_total_real"] = features_df["precio_clp"] + features_df["gastos_comunes"]
+
+    # El reindex de abajo alinea las columnas al orden exacto que espera el
+    # modelo, pero `fill_value=0` inventaría un cero para cualquier feature que
+    # la etapa de variables no haya producido - y un cero es un valor
+    # perfectamente plausible para casi todas (cantidad_*, piscina, ascensor...),
+    # así que el modelo predeciría sobre datos falsos sin que nada falle. Eso
+    # puede pasar si se reentrena con un selected_features.csv distinto al que
+    # tenía el modelo desplegado. Se corta acá con un error explícito.
+    features_faltantes = [c for c in modelo_info["features"] if c not in features_df.columns]
+    if features_faltantes:
+        raise ValueError(
+            f"La etapa de variables no produjo {len(features_faltantes)} feature(s) que el "
+            f"modelo {modelo_info.get('version_modelo', '(sin versión)')} espera: "
+            f"{features_faltantes}. Reindexarlas con 0 daría predicciones inválidas en "
+            f"silencio. Revisá que selected_features.csv siga siendo el que se usó para "
+            f"entrenar esa versión (ver artefactos_features/ de esa versión)."
+        )
 
     X = features_df.reindex(columns=modelo_info["features"], fill_value=0).fillna(0)
     pred_matrix = modelo_info["predict_ensemble_matrix"](modelo_info["models"], X)
@@ -265,12 +282,10 @@ def generar_predicciones(con_produccion, con_original, features_df: pd.DataFrame
 
 if __name__ == "__main__":
     con_produccion = db.conectar_produccion()
-    con_original = db.conectar_original()
 
-    resumen = generar_predicciones(con_produccion, con_original)
+    resumen = generar_predicciones(con_produccion)
 
     con_produccion.close()
-    con_original.close()
 
     log.info(
         f"Corrida completa. Predicciones generadas: {resumen['predicciones_generadas']} | "

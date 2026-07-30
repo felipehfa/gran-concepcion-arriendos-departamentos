@@ -14,7 +14,7 @@ CLAUDE.md
 .claude/
 
 # Datos grandes
-investigacion/01_obtener_datos/datos_vulnerabilidad/
+produccion/01_modelo_produccion/scrapers_base/datos_vulnerabilidad/
 
 # tipos de archivos
 *.log

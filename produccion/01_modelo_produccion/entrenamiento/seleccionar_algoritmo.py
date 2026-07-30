@@ -1,10 +1,10 @@
 """
 Selecciona qué algoritmo de investigación usar para entrenar el modelo de
 PRODUCCIÓN, comparando los JSON de métricas más recientes de cada corrida de
-investigación (04_modelamiento/save/model/*_metrics.json).
+investigación (02_modelos/save/model/*_metrics.json).
 
 No reentrena nada: solo lee los resultados de test ya reportados por
-04_modelamiento/01_xgboost.py y 04_modelamiento/02_lightgbm.py, y deja
+02_modelos/01_xgboost.py y 02_modelos/02_lightgbm.py, y deja
 registrada la decisión en `algoritmo_seleccionado.json` (junto a
 `version_modelo.json`), para que 01_entrenar_modelo_produccion.py sepa qué
 script de investigación cargar sin tener que comparar nada él mismo.
@@ -27,8 +27,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-MODEL_METRICS_DIR = INVESTIGACION_ROOT / "04_modelamiento" / "save" / "model"
+MODELAMIENTO_ROOT = REPO_ROOT / "modelamiento"
+MODEL_METRICS_DIR = MODELAMIENTO_ROOT / "02_modelos" / "save" / "model"
 
 METRICS_PATHS = {
     "xgboost": MODEL_METRICS_DIR / "xgboost_regression_precio_metrics.json",
@@ -46,7 +46,7 @@ def _cargar_metrics(algoritmo: str) -> dict:
         raise FileNotFoundError(
             f"No se encontró el JSON de métricas de investigación para "
             f"'{algoritmo}': {path}. Corre primero "
-            f"04_modelamiento/{'01_xgboost.py' if algoritmo == 'xgboost' else '02_lightgbm.py'}."
+            f"02_modelos/{'01_xgboost.py' if algoritmo == 'xgboost' else '02_lightgbm.py'}."
         )
     return json.loads(path.read_text(encoding="utf-8"))
 

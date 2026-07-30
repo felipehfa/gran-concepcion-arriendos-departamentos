@@ -2,7 +2,7 @@
 Backfill ÚNICO de fecha_publicacion_texto/aprox/precision para avisos que
 quedaron NULL por el bug de RE_FECHA_PUBLICACION (no reconocía "Publicado
 hoy" ni "Publicado esta semana", solo "Publicado hace ..."). Ya corregido en
-01_obtener_datos/02_scraper_detalle.py.
+scrapers_base/02_scraper_detalle.py.
 
 Reutiliza `visitar_aviso` de 02_scraper_detalle_incremental.py (mismo
 guardado UPSERT, mismo manejo de CAPTCHA/reintentos/contador de fallos que

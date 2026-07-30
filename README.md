@@ -29,36 +29,39 @@ explican cerca de un tercio de la predicción.
 
 ## 1. Arquitectura del pipeline
 
-El repo separa dos mundos: `investigacion/` (etapas 01-04, donde se scrapea, exploran y entrenan
-los modelos candidatos) y `produccion/` (pipeline independiente que corre solo, con su propia base
-de datos, más el dashboard). Ver sección 2 para el porqué de esta separación y sección 9 para el
-detalle del pipeline de producción.
+El repo separa `modelamiento/` (ingeniería de variables y entrenamiento de modelos) de `produccion/`
+(pipeline automatizado que corre solo, más el dashboard). **Ambos leen de la misma base de datos:
+Supabase/Postgres.** Ver sección 2 para el porqué de esta separación y sección 9 para el detalle del
+pipeline de producción.
+
+> **Cambio del 2026-07-29**: antes había dos stacks de datos paralelos — `investigacion/` con su
+> propia base SQLite versionada, y `produccion/` con Supabase. Se unificó: la SQLite se retiró y
+> `investigacion/` pasó a llamarse `modelamiento/`, quedando solo con las dos etapas que
+> efectivamente hace (variables y modelos). Los scrapers se movieron a
+> `produccion/01_modelo_produccion/scrapers_base/`, que es donde correspondían: el pipeline de
+> producción los importa vía `importlib` para no duplicar el parsing, así que nunca fueron código
+> exploratorio.
 
 ```
-investigacion/
-  01_obtener_datos/
-    01_scraper_grilla.py                  → tabla `avisos`               (requests + BeautifulSoup)
-    02_scraper_detalle.py                 → tabla `avisos_detalle`       (requests; Playwright solo como respaldo)
-    03_vulnerabilidad_socioterritorial.py → tablas `vulnerabilidad_uv`,
-                                             `avisos_igvust`               (geopandas, cruce espacial)
-          │  (todo persiste en avisos_gran_concepcion.db, SQLite)
-          ▼
-  02_analisis_exploratorio/
-    01_EDA.ipynb                          → exploración manual de los datos crudos
-          ▼
-  03_ingenieria_variables/
-    01_ingenieria_variables.py            → datos_ingenieria_variables.csv (1.627 filas × 45 columnas,
+modelamiento/
+  01_ingenieria_variables/
+    01_ingenieria_variables.py            → datos_ingenieria_variables.csv (lee de Supabase;
                                              target = costo_total_clp = precio_clp + gastos_comunes)
     02_seleccion_variables.py             → selected_features.csv          (29 features finales)
           ▼
-  04_modelamiento/
+  02_modelos/
     01_xgboost.py          → bagging ×10 + etiquetado oportunidad/caro
     02_lightgbm.py         → bagging ×10 + etiquetado oportunidad/caro (misma API que 01_xgboost.py)
 
 produccion/
   01_modelo_produccion/   → pipeline de producción, separado e independiente (sección 9)
+    scrapers_base/                                 → scrapers base que reutilizan las etapas
+                                                      incrementales vía importlib
+      01_scraper_grilla.py                         → parsing de la grilla   (requests + BeautifulSoup)
+      02_scraper_detalle.py                        → parsing del detalle    (requests; Playwright de respaldo)
+      03_vulnerabilidad_socioterritorial.py        → cruce espacial IGVUST  (geopandas)
     entrenamiento/seleccionar_algoritmo.py         → compara xgboost vs lightgbm (JSON de métricas
-                                                      de investigación) y elige el algoritmo ganador
+                                                      de modelamiento) y elige el algoritmo ganador
     entrenamiento/01_entrenar_modelo_produccion.py → entrena el algoritmo ganador, modelo versionado
                                                       (85/15 + calibración)
     00_orquestador.py                              → corre las etapas 1-5 de abajo en orden
@@ -77,16 +80,16 @@ produccion/
 Cada script ancla sus rutas de entrada/salida a la ubicación del propio archivo (no al
 directorio de trabajo actual), por lo que pueden ejecutarse desde la raíz del repo o desde su
 propia carpeta indistintamente. Los scripts de `produccion/` que reutilizan lógica de
-`investigacion/` (vía `importlib`, ya que los nombres empiezan con dígitos) cruzan ese límite
-apuntando explícitamente a `investigacion/...` desde su propia ubicación — ver sección 9.
+`modelamiento/` (vía `importlib`, ya que los nombres empiezan con dígitos) cruzan ese límite
+apuntando explícitamente a `modelamiento/...` desde su propia ubicación — ver sección 9.
 
-La base de datos SQLite (`investigacion/01_obtener_datos/avisos_gran_concepcion.db`, ~4 MB) **está
-versionada en el repo**, ya con los datos scrapeados y las tablas de vulnerabilidad resueltas — no
-hace falta correr los scrapers desde cero para reproducir la ingeniería de variables y el
-modelamiento (ver [Quick start](#12-quick-start)).
+Los datos viven en **Supabase/Postgres**, así que reproducir la ingeniería de variables y el
+modelamiento requiere `BD_STRING` configurado (ver [SETUP, sección 3](SETUP.md)) — no hace falta
+correr los scrapers desde cero, porque la base ya está poblada por el orquestador (ver
+[Quick start](#12-quick-start)).
 
-> El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers de
-> **investigación** (`investigacion/01_obtener_datos/`) sí recolectan casas, pero la etapa de
+> El pipeline de modelamiento trabaja exclusivamente sobre **departamentos**. Los scrapers base
+> (`produccion/01_modelo_produccion/scrapers_base/`) saben recolectar casas, pero la etapa de
 > ingeniería de variables filtra y trabaja solo con `tipo_propiedad = "departamento"`. El scraper
 > de grilla de **producción** va un paso más allá y directamente **no recorre casas**, ya que el
 > resto del pipeline de producción las descartaría de todas formas — evita gastar presupuesto de
@@ -97,42 +100,37 @@ modelamiento (ver [Quick start](#12-quick-start)).
 
 ## 2. Estructura de carpetas
 
-El repo separa `investigacion/` (etapas 01-04: scraping de investigación, exploración,
-ingeniería de variables y comparación de modelos candidatos) de `produccion/` (pipeline
-independiente que corre solo vía cron, más el dashboard) — dos mundos con una sola base de datos
-de investigación (`avisos_gran_concepcion.db`, SQLite versionada) y una de producción (Postgres en
-Supabase, actualizada por el orquestador vía `BD_STRING` — ver sección 9.4). Los scripts de `produccion/`
-reutilizan funciones de `investigacion/` vía `importlib` (sección 9) en vez de duplicar lógica de
-parsing/extracción; los nombres de carpeta dentro de `produccion/` se renumeraron de 01 a 03 al
-separarla de `investigacion/`, ya que dejó de ser continuación secuencial de la numeración 01-04.
+El repo separa `modelamiento/` (ingeniería de variables y entrenamiento de modelos) de `produccion/`
+(pipeline independiente que corre solo vía cron, más el dashboard). **Una sola base de datos para
+todo**: Postgres en Supabase, actualizada por el orquestador vía `BD_STRING` (ver sección 9.4). Los
+scripts de `produccion/` reutilizan funciones de `modelamiento/` vía `importlib` (sección 9) en vez
+de duplicar lógica; los nombres de carpeta dentro de `produccion/` se renumeraron de 01 a 03 al
+separarla, ya que dejó de ser continuación secuencial de la numeración original.
+
+Hasta el 2026-07-29 esta estructura era distinta: `modelamiento/` se llamaba `investigacion/`, tenía
+los scrapers en `01_obtener_datos/` y su **propia base SQLite versionada**
+(`avisos_gran_concepcion.db`), separada de la de producción. Mantener dos stacks de datos paralelos
+dejó de tener sentido cuando producción acumuló más avisos que la base histórica, así que se unificó:
+la SQLite se retiró, los scrapers se movieron a `produccion/01_modelo_produccion/scrapers_base/` (que
+es quien los usa) y quedaron solo las dos etapas de modelado.
 
 ```
 gran-concepcion-rentals/
-├── investigacion/
-│   ├── 01_obtener_datos/
-│   │   ├── 01_scraper_grilla.py
-│   │   ├── 02_scraper_detalle.py
-│   │   ├── 03_vulnerabilidad_socioterritorial.py
-│   │   ├── avisos_gran_concepcion.db          # SQLite, versionado en el repo
-│   │   └── datos_vulnerabilidad/              # shapefile IGVUST, NO versionado (.gitignore)
-│   │
-│   ├── 02_analisis_exploratorio/
-│   │   └── 01_EDA.ipynb
-│   │
-│   ├── 03_ingenieria_variables/
+├── modelamiento/
+│   ├── 01_ingenieria_variables/
 │   │   ├── 01_ingenieria_variables.py
 │   │   ├── 02_seleccion_variables.py
 │   │   └── save/
 │   │       ├── ingeniaria_variables/
 │   │       │   ├── datos_ingenieria_variables.csv
-│   │       │   ├── niveles_barrio.json
+│   │       │   ├── niveles_barrio.json        # ⚠ también los lee la INFERENCIA de producción
 │   │       │   └── modelos_superficie/*.pkl   # RandomForest de IMPUTACIÓN de superficie (no es el
 │   │       │                                  # modelo de precio, ver sección 3.4)
 │   │       └── seleccion_variables/
 │   │           ├── selected_features.csv
 │   │           └── seleccion_variables_reporte.json
 │   │
-│   └── 04_modelamiento/
+│   └── 02_modelos/
 │       ├── 01_xgboost.py
 │       ├── 02_lightgbm.py
 │       └── save/model/
@@ -191,7 +189,7 @@ alerta, no de buen desempeño, ya que el modelo estaba viendo (indirectamente) l
 debía predecir.
 
 La corrección, implementada en `agregar_precio_m2_sector`
-(`investigacion/03_ingenieria_variables/01_ingenieria_variables.py`), calcula el precio/m² de cada aviso
+(`modelamiento/01_ingenieria_variables/01_ingenieria_variables.py`), calcula el precio/m² de cada aviso
 usando **solo comparables de OTRAS propiedades** dentro de un radio de 300 metros (excluyendo la
 fila propia), con:
 - filtro de outliers vía IQR (multiplicador ×3) sobre el precio/m² del sector antes de promediar,
@@ -341,7 +339,7 @@ arriendo nominal), ignorando esa diferencia.
 
 ## 4. Features del modelo final (29)
 
-Seleccionadas por `investigacion/03_ingenieria_variables/02_seleccion_variables.py` a partir de 41 features
+Seleccionadas por `modelamiento/01_ingenieria_variables/02_seleccion_variables.py` a partir de 41 features
 candidatas (ver sección 6 para la metodología de selección). Target = `costo_total_clp`
 (arriendo + gastos comunes, sección 3.6); `gastos_comunes` y `precio_clp` se excluyen
 explícitamente de las candidatas por ser fuga de datos hacia el target. Mismas 29 features para
@@ -521,7 +519,7 @@ error en casos extremos, mejoró de ~2.7 a ~2.1 tras la limpieza de datos), prob
 `log(precio_clp)` como target (descartado, sin mejora) y revisó manualmente los casos de error
 más extremo para descartar errores de datos frente a variabilidad genuina de mercado.
 
-La **etapa de refinamiento** (la que definió la versión final, en `investigacion/04_modelamiento/`) introdujo:
+La **etapa de refinamiento** (la que definió la versión final, en `modelamiento/02_modelos/`) introdujo:
 
 - **Split estratificado por quintil de precio**, en reemplazo de un split aleatorio simple que
   mostraba inestabilidad severa entre corridas.
@@ -561,7 +559,7 @@ producción reentrenadas sobre el nuevo target.
 
 ## 6. Selección de variables (metodología)
 
-`investigacion/03_ingenieria_variables/02_seleccion_variables.py` reduce 41 features candidatas
+`modelamiento/01_ingenieria_variables/02_seleccion_variables.py` reduce 41 features candidatas
 (45 columnas del CSV, menos `id_aviso`, el target `costo_total_clp`, y `precio_clp`/
 `gastos_comunes` excluidas explícitamente por fuga de datos hacia el target — sección 3.6) a las
 29 finales en 4 pasos:
@@ -636,7 +634,7 @@ así que `seleccionar_algoritmo.py` no emite advertencia por ese segmento (ver s
 
 A diferencia de etapas anteriores del proyecto (con Random Forest como tercera opción, ver
 sección 5), el pipeline actual **no fija editorialmente un "modelo final" único** en
-investigación: los dos scripts de `investigacion/04_modelamiento/` se entrenan y evalúan en
+investigación: los dos scripts de `modelamiento/02_modelos/` se entrenan y evalúan en
 paralelo sobre las mismas 29 features, y
 `produccion/01_modelo_produccion/entrenamiento/seleccionar_algoritmo.py` decide de
 forma automática cuál entrena el modelo de **producción**, comparando los JSON de métricas de
@@ -652,7 +650,7 @@ es, además, la base del sistema de etiquetado de la sección 8.
 
 ## 8. Sistema de etiquetado "oportunidad / caro"
 
-Implementado en ambos scripts de `investigacion/04_modelamiento/` (`01_xgboost.py` y `02_lightgbm.py`, misma
+Implementado en ambos scripts de `modelamiento/02_modelos/` (`01_xgboost.py` y `02_lightgbm.py`, misma
 lógica en los dos), sobre el ensamble de bagging propio de cada uno (los 10 modelos, no un
 modelo único) y solo para el set de test. Los números de esta sección corresponden a
 **LightGBM** (el algoritmo vigente en producción, ver sección 7).
@@ -687,7 +685,7 @@ A diferencia de la corrida anterior del proyecto (con `precio_clp` como target),
 47% vs. 14 de 36 ≈ 39%) — conviene revisar con más cautela las etiquetas de "oportunidad" en
 avisos de baja confianza.
 
-Los resultados se exportan a `investigacion/04_modelamiento/save/model/` con un prefijo por algoritmo
+Los resultados se exportan a `modelamiento/02_modelos/save/model/` con un prefijo por algoritmo
 (`xgboost_regression_precio_*` y `lightgbm_regression_precio_*`, cada script genera el suyo):
 - `..._oportunidades_test.csv` (detalle fila por fila)
 - `..._oportunidades_resumen_decil.csv` (conteo por decil de precio)
@@ -697,16 +695,18 @@ Los resultados se exportan a `investigacion/04_modelamiento/save/model/` con un 
 
 ## 9. Pipeline de producción (`produccion/01_modelo_produccion/`)
 
-Sistema separado e independiente de `investigacion/01_obtener_datos/` a `investigacion/04_modelamiento/`: usa su **propia
-base de datos** (Postgres en Supabase — hasta 2026-07-26 fue un archivo SQLite versionado en el
-repo, ver sección 9.4), nunca escribe en `avisos_gran_concepcion.db` (la trata como fuente de solo
-lectura), y está pensado para correr sin intervención manual vía cron, agregando avisos nuevos y
-sus predicciones día a día.
+Pipeline automatizado, pensado para correr sin intervención manual vía cron, agregando avisos nuevos
+y sus predicciones día a día sobre Postgres/Supabase (ver sección 9.4). Reutiliza dos cosas de
+`modelamiento/`, vía `importlib` y sin duplicarlas: la lógica de features de
+`01_ingenieria_variables/01_ingenieria_variables.py` y el módulo del algoritmo ganador de
+`02_modelos/`. Desde el 2026-07-29 comparte además la **misma base de datos** que el modelamiento:
+antes había una SQLite de investigación aparte que este pipeline leía como fuente de solo lectura, y
+que se retiró.
 
 ### 9.1 Selección de algoritmo y entrenamiento
 
 **`entrenamiento/seleccionar_algoritmo.py`** — no reentrena nada: lee los JSON de métricas de
-test más recientes de `investigacion/04_modelamiento/01_xgboost.py` y `02_lightgbm.py`, valida que sean
+test más recientes de `modelamiento/02_modelos/01_xgboost.py` y `02_lightgbm.py`, valida que sean
 comparables (mismas features/seed/tamaño de test) y elige un ganador por criterio ponderado (50%
 MAE + 50% RMSE test, normalizado — ver sección 7), advirtiendo si el ganador global no es el
 mejor en Q5. Decisión persistida en `algoritmo_seleccionado.json`.
@@ -740,7 +740,7 @@ conexión, sin migraciones manuales):
 | `logs_ejecucion` | Log persistente por etapa, espejo de `logs/orquestador.log` pero consultable con SQL |
 | `historial_diario_avisos` | Snapshot diario de `estado_publicacion` por aviso (UPSERT sobre `(fecha, id_aviso)`), usado por la pestaña de estadísticas diarias del dashboard |
 | `control` | Clave/valor genérico (ej. cooldown tras CAPTCHA del scraper de detalle) |
-| `valores_uf` | Caché de valor UF por fecha (mindicador.cl), compartida entre `05_prediccion.py` y el dashboard — definida en `investigacion/03_ingenieria_variables/01_ingenieria_variables.py`, no en `db.py` |
+| `valores_uf` | Caché de valor UF por fecha (mindicador.cl), compartida entre `05_prediccion.py` y el dashboard — definida en `modelamiento/01_ingenieria_variables/01_ingenieria_variables.py`, no en `db.py` |
 
 **Etapas** (cada una reutiliza el script equivalente de investigación vía `importlib`, sin
 duplicar lógica de parsing/extracción):
@@ -790,7 +790,7 @@ Postgres gestionado en Supabase:
   podía leer el `.db` a medio escribir y tirar `OperationalError`.
 
 La migración (código en `db.py`, los 6 scripts de `01_modelo_produccion/`, `data.py` del
-dashboard, y las funciones de caché UF de `investigacion/03_ingenieria_variables/01_ingenieria_variables.py`,
+dashboard, y las funciones de caché UF de `modelamiento/01_ingenieria_variables/01_ingenieria_variables.py`,
 que ahora son dialect-aware SQLite/Postgres) usa `psycopg2` contra el *connection pooler* de
 Supabase (modo *transaction*, puerto 6543 — no la conexión directa: los runners de GitHub Actions
 no tienen salida IPv6 confiable, y la conexión directa de Supabase resuelve solo por IPv6). La
@@ -805,8 +805,10 @@ lectura salvo por la caché de UF— usa `streamlit_app`, con `SELECT` en todo e
 no alcanza para escribir ni borrar en las tablas de negocio (`avisos`, `predicciones`, `corridas`,
 etc.) — detalle de los grants en [SETUP.md](SETUP.md).
 
-`investigacion/01_obtener_datos/avisos_gran_concepcion.db` (la base de investigación) **no se
-migró**: sigue siendo SQLite local, versionada, sin escritura automática ni secrets.
+La base SQLite de investigación (`avisos_gran_concepcion.db`) quedó fuera de esa migración en su
+momento, pero se **retiró por completo el 2026-07-29**: mantener dos stacks de datos paralelos dejó
+de tener sentido cuando producción acumuló más avisos que la base histórica, y el modelamiento pasó a
+entrenar directamente contra Supabase.
 
 ---
 
@@ -909,13 +911,22 @@ variable de entorno homónima en local (ver [SETUP.md](SETUP.md) para cómo corr
 
 ## 12. Quick start
 
-Con los datos ya incluidos en el repo (no hace falta scrapear desde cero):
+Requiere `BD_STRING` apuntando a la base de Supabase (ver [SETUP, sección 3](SETUP.md)); los datos ya
+están ahí, no hace falta scrapear desde cero:
 
 ```bash
-pip install pandas numpy scikit-learn joblib xgboost lightgbm optuna scipy
-python investigacion/03_ingenieria_variables/01_ingenieria_variables.py
-python investigacion/03_ingenieria_variables/02_seleccion_variables.py
-python investigacion/04_modelamiento/02_lightgbm.py   # entrenamiento + etiquetado oportunidad/caro
+pip install pandas numpy scikit-learn joblib xgboost lightgbm optuna scipy psycopg2-binary
+python modelamiento/01_ingenieria_variables/01_ingenieria_variables.py
+python modelamiento/01_ingenieria_variables/02_seleccion_variables.py
+python modelamiento/02_modelos/02_lightgbm.py   # entrenamiento + etiquetado oportunidad/caro
+```
+
+Para reentrenar el modelo **de producción** (versionado, con los artefactos archivados), usá en
+cambio:
+
+```bash
+python produccion/01_modelo_produccion/entrenamiento/01_entrenar_modelo_produccion.py \
+    --origen-datos supabase --estados activo pausado finalizado --meses-max-finalizados 3
 ```
 
 Para el detalle de dependencias por etapa, scraping desde cero y cómo correr el dashboard, ver

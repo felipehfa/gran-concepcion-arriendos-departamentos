@@ -60,7 +60,7 @@ def _render_shap_tabla() -> str:
 <td style='text-align:right;padding:4px 10px 4px 0;'>% del total</td><td>Dirección</td>
 </tr>{filas}</table>"""
 
-# Las 29 features que usa el modelo vigente (ver 03_ingenieria_variables/save/seleccion_variables/
+# Las 29 features que usa el modelo vigente (ver 01_ingenieria_variables/save/seleccion_variables/
 # selected_features.csv y sección 4 del README), agrupadas igual que ahí, con una explicación en
 # lenguaje simple de qué mide cada una. Contenido estático (no se lee en vivo), igual que el resto
 # de las cifras de este archivo.

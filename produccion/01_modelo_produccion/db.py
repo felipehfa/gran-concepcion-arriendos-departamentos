@@ -14,19 +14,47 @@ logs_ejecucion, historial_diario_avisos, control, valores_uf.
 """
 
 import os
-import sqlite3
 from pathlib import Path
 
 import psycopg2
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+RUTA_ENV = REPO_ROOT / ".env"
 
-RUTA_BD_ORIGINAL = INVESTIGACION_ROOT / "01_obtener_datos" / "avisos_gran_concepcion.db"
+
+def cargar_env_si_existe(ruta_env: Path = RUTA_ENV) -> None:
+    """Carga al entorno las variables de un archivo `.env` en la raíz del repo.
+
+    Hace falta porque nada más lo leía: SETUP.md indica crear ese archivo con
+    `BD_STRING` para correr localmente, pero cualquier script fallaba con
+    KeyError('BD_STRING') porque `os.environ` no se entera solo del archivo.
+
+    "Si existe" es la parte importante: en GitHub Actions y en Streamlit Cloud no
+    hay `.env` (las variables llegan como secrets ya en el entorno), así que ahí
+    esto es un no-op. Las variables YA definidas en el entorno tienen prioridad
+    sobre el archivo, para que un `export BD_STRING=...` puntual gane.
+
+    No se usa python-dotenv para no agregar una dependencia por diez líneas -
+    mismo criterio que el resto del repo, que no tiene requirements en la raíz.
+    """
+    if not ruta_env.exists():
+        return
+
+    for linea in ruta_env.read_text(encoding="utf-8").splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+        clave, valor = linea.split("=", 1)
+        clave = clave.strip()
+        # Se aceptan comillas alrededor del valor: el formato TOML de los
+        # secrets de Streamlit Cloud las usa, y es fácil copiar/pegar de ahí.
+        valor = valor.strip().strip('"').strip("'")
+        if clave and clave not in os.environ:
+            os.environ[clave] = valor
+
 
 # Mismas subcategorías de punto de interés que `SUBCATEGORIAS_POI.values()`
-# en `01_obtener_datos/02_scraper_detalle.py`. Se duplica esta lista (en vez
+# en `scrapers_base/02_scraper_detalle.py`. Se duplica esta lista (en vez
 # de importar ese script) para que `db.py` no arrastre la dependencia de
 # Playwright — este módulo lo importan también etapas puramente de
 # datos/modelo (ingeniería de variables, predicción) que no deberían
@@ -53,21 +81,18 @@ SUBCATEGORIAS_POI_COLUMNAS = [
 def conectar_produccion() -> psycopg2.extensions.connection:
     """Abre la conexión a la base de datos de producción (Supabase) y se
     asegura de que las tablas existan."""
+    cargar_env_si_existe()
+    if "BD_STRING" not in os.environ:
+        raise RuntimeError(
+            f"Falta la variable de entorno BD_STRING. Localmente se define en {RUTA_ENV} "
+            f"(ver SETUP.md, sección 3); en GitHub Actions y Streamlit Cloud, como secret."
+        )
     # sslmode='require' explícito: sin esto psycopg2 usa 'prefer' por
     # default, que se degrada en silencio a texto plano si la negociación
     # TLS llega a fallar por algún motivo, en vez de cortar la conexión.
     con = psycopg2.connect(os.environ["BD_STRING"], sslmode="require")
     inicializar_bd_produccion(con)
     return con
-
-
-def conectar_original(ruta_bd: Path = RUTA_BD_ORIGINAL) -> sqlite3.Connection:
-    """Abre la base de datos ORIGINAL (de investigación) en modo solo-lectura
-    (URI mode). Esta base sigue siendo un archivo SQLite local, no versionado
-    en git ni parte de producción. Ningún script de produccion/01_modelo_produccion/
-    debe escribir en esta base."""
-    uri = f"file:{ruta_bd.as_posix()}?mode=ro"
-    return sqlite3.connect(uri, uri=True)
 
 
 # ------------------------------------------------------------------
@@ -227,7 +252,7 @@ def inicializar_bd_produccion(con: psycopg2.extensions.connection) -> None:
     """)
 
     # valores_uf: caché del valor de la UF por fecha, usada por
-    # convertir_precios_uf_a_clp (investigacion/03_ingenieria_variables/01_ingenieria_variables.py).
+    # convertir_precios_uf_a_clp (modelamiento/01_ingenieria_variables/01_ingenieria_variables.py).
     # Se crea acá (con el rol `postgres`, dueño del schema) y no solo desde esa
     # función, porque el rol `streamlit_app` del dashboard (ver SETUP.md) no
     # tiene privilegio CREATE sobre el schema - si esta tabla no existiera ya

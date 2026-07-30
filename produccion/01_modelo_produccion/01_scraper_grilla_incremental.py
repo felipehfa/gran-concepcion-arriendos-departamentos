@@ -1,7 +1,7 @@
 """
 Scraper de GRILLA incremental — pipeline de producción.
 
-No duplica el parsing HTML: carga `01_obtener_datos/01_scraper_grilla.py`
+No duplica el parsing HTML: carga `scrapers_base/01_scraper_grilla.py`
 como módulo (vía importlib, mismo patrón que las etapas anteriores) y
 reutiliza `construir_url`, `obtener_html`, `parsear_pagina`,
 `limpiar_precio` y sus constantes (comunas, delays, selectores).
@@ -12,8 +12,14 @@ Diferencias respecto al scraper original:
     pipeline de producción solo procesa departamentos, así que traer casas
     sería gastar presupuesto de scraping en avisos que nunca generan
     features ni predicción.
-  - Guarda SOLO avisos cuyo id_aviso no exista ya en la base ORIGINAL
-    (avisos_gran_concepcion.db, solo lectura) NI en la base de PRODUCCIÓN.
+  - Guarda SOLO avisos cuyo id_aviso no exista ya en la base de PRODUCCIÓN.
+    Hasta 2026-07-29 también deduplicaba contra la base SQLite de
+    investigación, pero eso era un resabio del bootstrapping inicial: esa base
+    ya no existe (todo el pipeline lee de Supabase). Consecuencia asumida a
+    conciencia: los 30 departamentos que estaban en la base histórica y nunca
+    se migraron vuelven a ser elegibles si reaparecen en la grilla - y si
+    reaparecen es porque están publicados de nuevo, así que capturarlos es lo
+    correcto.
   - Corte por MAX_PAGINAS_VACIAS_CONSECUTIVAS páginas seguidas sin ningún
     aviso nuevo, contado por combinación comuna×tipo.
   - Techo de presupuesto por corrida (MAX_PAGINAS_POR_CORRIDA /
@@ -50,9 +56,8 @@ MAX_MINUTOS_POR_CORRIDA = 30           # techo global de tiempo
 TIPOS_PROPIEDAD_PRODUCCION = ["departamento"]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-INVESTIGACION_ROOT = REPO_ROOT / "investigacion"
-SCRAPER_GRILLA_ORIGINAL_PATH = INVESTIGACION_ROOT / "01_obtener_datos" / "01_scraper_grilla.py"
+SCRAPERS_BASE_DIR = SCRIPT_DIR / "scrapers_base"
+SCRAPER_GRILLA_ORIGINAL_PATH = SCRAPERS_BASE_DIR / "01_scraper_grilla.py"
 
 
 def _cargar_modulo_scraper_grilla():
@@ -86,13 +91,8 @@ def _a_real(valor):
 
 
 # ------------------------------------------------------------------
-# Deduplicación contra las dos bases
+# Deduplicación
 # ------------------------------------------------------------------
-def obtener_ids_originales(con_original) -> set:
-    cur = con_original.execute("SELECT id_aviso FROM avisos")
-    return {fila[0] for fila in cur.fetchall()}
-
-
 def obtener_ids_produccion(con_produccion) -> set:
     cur = con_produccion.cursor()
     cur.execute("SELECT id_aviso FROM avisos")
@@ -102,9 +102,9 @@ def obtener_ids_produccion(con_produccion) -> set:
 def guardar_pagina_en_produccion(avisos: list, con_produccion, ids_conocidos: set) -> int:
     """
     Inserta en la tabla `avisos` de producción solo los avisos cuyo
-    id_aviso no esté ya en `ids_conocidos` (unión de ids de la base
-    original + producción + lo visto en esta misma corrida). Hace commit
-    inmediatamente (guardado incremental, igual que el scraper original).
+    id_aviso no esté ya en `ids_conocidos` (ids de producción + lo visto en
+    esta misma corrida). Hace commit inmediatamente (guardado incremental,
+    igual que el scraper original).
     """
     hoy = date.today().isoformat()
     cur = con_produccion.cursor()
@@ -141,7 +141,6 @@ def guardar_pagina_en_produccion(avisos: list, con_produccion, ids_conocidos: se
 # ------------------------------------------------------------------
 def scrapear_grilla_incremental(
     con_produccion,
-    con_original,
     comunas: list = None,
     tipos: list = None,
     max_paginas_vacias: int = MAX_PAGINAS_VACIAS_CONSECUTIVAS,
@@ -151,11 +150,8 @@ def scrapear_grilla_incremental(
     comunas = comunas or sg.COMUNAS_GRAN_CONCEPCION
     tipos = tipos or TIPOS_PROPIEDAD_PRODUCCION
 
-    ids_originales = obtener_ids_originales(con_original)
-    ids_produccion = obtener_ids_produccion(con_produccion)
-    ids_conocidos = ids_originales | ids_produccion
-    log.info(f"{len(ids_originales)} avisos en la BD original, "
-              f"{len(ids_produccion)} ya en producción.")
+    ids_conocidos = obtener_ids_produccion(con_produccion)
+    log.info(f"{len(ids_conocidos)} avisos ya en producción.")
 
     total_vistos = 0
     total_nuevos = 0
@@ -234,12 +230,10 @@ def scrapear_grilla_incremental(
 
 if __name__ == "__main__":
     con_produccion = db.conectar_produccion()
-    con_original = db.conectar_original()
 
-    resumen = scrapear_grilla_incremental(con_produccion, con_original)
+    resumen = scrapear_grilla_incremental(con_produccion)
 
     con_produccion.close()
-    con_original.close()
 
     log.info(
         f"Corrida completa. Avisos vistos: {resumen['total_vistos']} | "

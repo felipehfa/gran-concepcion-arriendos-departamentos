@@ -1,6 +1,6 @@
 {
-  "contador": 6,
-  "version_actual": "v0006_20260721211302_lightgbm_5fbde493",
+  "contador": 7,
+  "version_actual": "v0007_20260729210559_lightgbm_a9fa277f",
   "historial": [
     {
       "version": "v0001_20260711131332_eae758c2",
@@ -35,6 +35,12 @@
       "algoritmo": "lightgbm",
       "fecha_entrenamiento": "2026-07-21 21:13:02",
       "hash_hiperparametros": "5fbde493"
+    },
+    {
+      "version": "v0007_20260729210559_lightgbm_a9fa277f",
+      "algoritmo": "lightgbm",
+      "fecha_entrenamiento": "2026-07-29 21:05:59",
+      "hash_hiperparametros": "a9fa277f"
     }
   ]
 }
