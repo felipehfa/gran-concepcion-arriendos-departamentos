@@ -1,8 +1,14 @@
 name: Orquestador cada 4h - Producción
 
+# PAUSADO 2026-08-09: portalinmobiliario.com empezó a exigir sesión
+# autenticada (muro "negative_traffic" en /gz/account-verification) para
+# cualquier request sin cookies de navegador real, incluso la portada. Desde
+# el 2026-08-05 esto hizo que 02_scraper_detalle_incremental.py marcara en
+# masa avisos activos como 'no_disponible' (falso positivo: interpretaba el
+# muro como "el aviso fue eliminado"). Se deshabilita el cron hasta resolver
+# la forma de scrapear el sitio; el trigger manual (workflow_dispatch) queda
+# para poder retomar a mano cuando corresponda.
 on:
-  schedule:
-    - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
   workflow_dispatch:         # permite correrlo manualmente desde la pestaña Actions
 
 # Ya no se pushea nada al repo (la BD vive en Supabase) - explícito solo
