@@ -224,9 +224,13 @@ comparador de mercado quede en la misma escala que lo que el modelo predice.
 - **Mitigaciones de bloqueo**: delays variables entre requests, reintento con backoff ante fallos
   aislados, y detección de CAPTCHA por **doble condición** (la palabra "captcha" en el HTML **Y**
   el contenido normal no cargó) para no confundir con el reCAPTCHA de fondo casi siempre
-  presente.
+  presente. Un tercer tipo de bloqueo — un muro de verificación de cuenta que responde HTTP 200
+  sin CAPTCHA visible — se detecta aparte por la URL final tras redirects
+  (`_es_muro_verificacion`) y corta la corrida igual que un CAPTCHA; ver el incidente de agosto
+  2026 en la sección 9.5.
 - **Fallos persistentes entre corridas**: un contador (`intentos_fallidos_detalle`) suma en cada
-  fallo y se resetea en éxito; tras 5 fallos consecutivos el aviso se marca
+  fallo — incluyendo un mismatch de canonical/og:url que no resultó ser el sitio completo
+  bloqueado (ver 9.5) — y se resetea en éxito; tras 5 fallos consecutivos el aviso se marca
   `estado_publicacion = 'no_disponible'` y sale de la cola de pendientes.
 - **Bug corregido: `avisos_detalle.banos` capturaba la superficie, no los baños.** El regex
   original (con `re.IGNORECASE`) encontraba primero la insignia superior de la página ("2
@@ -747,9 +751,12 @@ duplicar lógica de parsing/extracción):
 
 1. **Scraper de grilla** — solo avisos con `id_aviso` nuevo; corta por páginas vacías
    consecutivas o por techo de tiempo/páginas por corrida.
-2. **Scraper de detalle** — avisos nuevos sin detalle, más **re-chequeo** de avisos `activo`
-   vencidos (>7 días o nunca chequeados, estos primero) en batches; UPSERT para no perder las
-   columnas de vulnerabilidad; 5 fallos consecutivos → `no_disponible`.
+2. **Scraper de detalle** — avisos nuevos sin detalle, más **re-chequeo** de avisos `activo` o
+   `pausado` vencidos (>1 día desde el último chequeo, o nunca chequeados, estos primero) en
+   batches; UPSERT para no perder las columnas de vulnerabilidad. Un fetch fallido o un contenido
+   que no corresponde al `id_aviso` pedido suma a `intentos_fallidos_detalle`; tras 5 fallos
+   consecutivos → `no_disponible`. Si en cambio el sitio completo redirige a un muro de
+   verificación, la corrida se corta de inmediato sin marcar ningún aviso (ver 9.5).
 3. **Vulnerabilidad** — cruce punto-en-polígono contra los polígonos IGVUST precalculados
    (`shapely` puro, sin `geopandas`), solo avisos con `uv_rsh` aún `NULL`. La tabla de polígonos
    se llena una única vez corriendo a mano `migrar_poligonos_vulnerabilidad.py`.
@@ -766,9 +773,10 @@ duplicar lógica de parsing/extracción):
 Corre las 5 etapas en orden, logueando a archivo rotativo y a la tabla `logs_ejecucion`. Si una
 etapa falla, se detiene ahí (las siguientes no corren), marca `corridas.resultado='error'` y sale
 con código distinto de cero para que GitHub Actions marque la corrida como fallida. Un corte por
-CAPTCHA en el scraper de detalle no es una excepción: las etapas siguientes igual corren y la
-corrida queda `'parcial'`. **Alerta de fallo silencioso** si las últimas 5 corridas tuvieron 0
-avisos nuevos (posible cambio de estructura del sitio o bloqueo no detectado).
+CAPTCHA o por el muro de verificación del sitio (ver 9.5) en el scraper de detalle no es una
+excepción: las etapas siguientes igual corren y la corrida queda `'parcial'`. **Alerta de fallo
+silencioso** si las últimas 5 corridas tuvieron 0 avisos nuevos (posible cambio de estructura del
+sitio o bloqueo no detectado).
 
 Desplegado vía GitHub Actions, corre cada 4 horas + `workflow_dispatch` manual, conectándose a
 Supabase con el secret `BD_STRING` (ver sección 9.4) — ya no hay ningún paso de commit/push al
@@ -809,6 +817,51 @@ La base SQLite de investigación (`avisos_gran_concepcion.db`) quedó fuera de e
 momento, pero se **retiró por completo el 2026-07-29**: mantener dos stacks de datos paralelos dejó
 de tener sentido cuando producción acumuló más avisos que la base histórica, y el modelamiento pasó a
 entrenar directamente contra Supabase.
+
+### 9.5 Incidente: muro de verificación del sitio marcó avisos activos como eliminados (agosto 2026)
+
+**Qué pasó**: entre 2026-08-05 y 2026-08-09, portalinmobiliario.com empezó a redirigir tráfico que
+clasificó como automatizado — incluida la portada, sin distinguir por URL — a un muro de
+verificación de cuenta (`/gz/account-verification`, HTTP 200, sin CAPTCHA visible). El scraper de
+grilla dejó de encontrar avisos nuevos (la página que recibía era el muro, no la grilla real) y el
+scraper de detalle interpretó ese mismo muro como confirmación de que cada aviso visitado había
+sido eliminado: `_url_coincide_con_aviso` (el chequeo de `<link rel="canonical">` / `<meta
+property="og:url">` contra el `id_aviso` pedido, pensado para detectar avisos borrados que el
+sitio redirige sin dar 404 — ver 3.2) fallaba por igual para absolutamente todos los avisos, y
+`02_scraper_detalle_incremental.py` marcaba `estado_publicacion='no_disponible'` de inmediato ante
+ese resultado, sin pasar por el contador de reintentos. En dos días, **1543 avisos activos
+quedaron marcados como no disponibles por error**, vaciando el buscador del dashboard.
+
+**Diagnóstico**: confirmado en vivo reproduciendo el fetch del scraper contra el sitio real (tanto
+con `requests` plano como con Playwright + `playwright-stealth`, ambos redirigidos al mismo muro
+incluso en la portada) y cruzando contra la base: `fecha_ultimo_chequeo_estado` mostraba el salto
+de `no_disponible` concentrado en 2026-08-05 a 2026-08-07 (400 + 797 + 346 avisos), e
+`intentos_fallidos_detalle = 0` en el 100% de esas filas confirmaba que ninguna había pasado por
+el camino normal de reintentos — todas cayeron por la ruta de "confirmación inmediata".
+
+**Corrección** (`scrapers_base/02_scraper_detalle.py` y `02_scraper_detalle_incremental.py`):
+- Se distingue ahora un tercer resultado, `"bloqueado"`, detectado por la URL final tras
+  redirects (`_es_muro_verificacion`, evaluado antes que canonical/og:url) — significa "el sitio
+  está bloqueando todo el tráfico", no "este aviso en particular fue eliminado". Corta la corrida
+  completa de inmediato (mismo cooldown que un CAPTCHA) sin tocar `estado_publicacion` de ningún
+  aviso.
+- Lo que sigue devolviendo `"no_encontrado"` (mismatch de canonical por otra causa, ya descartado
+  el bloqueo de sitio completo) ya no marca `no_disponible` de inmediato: pasa por el mismo
+  contador `intentos_fallidos_detalle` que un error de red, así que hace falta que se repita en
+  varias corridas antes de confiar en la conclusión.
+- Se revirtieron a `activo` (con `fecha_ultimo_chequeo_estado` limpio) los 1543 avisos afectados,
+  respaldando antes las filas tocadas.
+- El cron del orquestador se pausó el 2026-08-09 (quitando el trigger `schedule`, dejando solo
+  `workflow_dispatch`) mientras el bloqueo seguía activo, y se reactivó el 2026-08-10 al
+  confirmarse en vivo que el muro ya no estaba presente y tras aplicar la corrección de arriba.
+
+**Nota sobre legitimidad del scraping**: el `robots.txt` del sitio permite explícitamente las tres
+superficies que toca el pipeline — páginas de grilla (sin match en ningún `Disallow` de la sección
+de búsqueda), paginación vía `_Desde_` (`Allow: /*_Desde_`) y páginas de detalle terminadas en
+`_JM` (`Allow: /*_JM$`). El muro de verificación es un control anti-bot activo, independiente de
+robots.txt (una convención dirigida a crawlers como Googlebot, no un mecanismo de enforcement) —
+no cambia que las rutas scrapeadas nunca estuvieron prohibidas por la política de crawling que el
+propio sitio publica.
 
 ---
 
@@ -887,8 +940,11 @@ variable de entorno homónima en local (ver [SETUP.md](SETUP.md) para cómo corr
 **Del scraping:**
 - Depende de la estructura HTML/CSS del sitio, que puede cambiar sin aviso (mitigado con regex de
   respaldo, no eliminado).
-- Riesgo de bloqueo/CAPTCHA, mitigado con delays, reintentos y tandas vía cron; ruta de respaldo
-  con Playwright si la principal empezara a bloquearse.
+- Riesgo de bloqueo/CAPTCHA o de un muro de verificación de cuenta del sitio (ya ocurrió una vez y
+  marcó ~1550 avisos activos como eliminados por error antes de corregirse, ver 9.5), mitigado con
+  delays, reintentos, tandas vía cron, y — desde esa corrección — distinguiendo explícitamente "el
+  sitio nos bloqueó" de "este aviso fue eliminado"; ruta de respaldo con Playwright si la ruta
+  principal empezara a bloquearse de forma persistente.
 - Las coordenadas de cada aviso son aproximadas al sector (no la dirección exacta), lo que acota
   la precisión de las variables espaciales derivadas.
 - El shapefile IGVUST es un dato externo no versionado; regenerar ese cruce requiere obtenerlo

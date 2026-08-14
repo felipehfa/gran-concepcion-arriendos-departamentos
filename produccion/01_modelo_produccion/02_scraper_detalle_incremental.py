@@ -47,11 +47,25 @@ Algunos avisos eliminados no dan 404: el sitio responde 200 con el HTML de
 otra página (ej. el buscador), sin que el status por sí solo lo delate. Para
 detectarlo, `obtener_detalle_aviso` verifica que <link rel="canonical"> y
 <meta property="og:url"> del HTML descargado mencionen el id_aviso pedido; si
-cualquiera de los dos no lo hace, devuelve "resultado": "no_encontrado". A
-diferencia de un fallo de red, acá no hace falta esperar a
-MAX_INTENTOS_FALLIDOS_DETALLE corridas: el aviso se marca
-`estado_publicacion='no_disponible'` de inmediato (ver `visitar_aviso`), ya
-que reintentar la misma URL no va a cambiar el resultado.
+cualquiera de los dos no lo hace, devuelve "resultado": "no_encontrado".
+
+Hasta 2026-08-09 este caso marcaba `estado_publicacion='no_disponible'` DE
+INMEDIATO, sin pasar por `intentos_fallidos_detalle`, asumiendo que un
+mismatch de canonical solo podía significar "el aviso fue eliminado". Esa
+asunción resultó falsa: entre 2026-08-05 y 2026-08-09 portalinmobiliario.com
+bloqueó tráfico automatizado con un muro de verificación de cuenta
+(`/gz/account-verification`) que responde 200 a CUALQUIER URL sin canonical
+ni og:url del recurso pedido - disparando "no_encontrado" para todos los
+avisos por igual y marcando ~1550 avisos activos como 'no_disponible' por
+error. Ahora ese caso específico se detecta aparte, ANTES de llegar siquiera
+al chequeo de canonical (`_es_muro_verificacion` en scrapers_base/
+02_scraper_detalle.py, resultado "bloqueado"), y corta la corrida entera sin
+tocar `estado_publicacion` de ningún aviso - mismo tratamiento que un
+CAPTCHA. Lo que sigue clasificándose como "no_encontrado" en este punto ya
+descartó esa causa específica, pero de todas formas se trata con la misma
+cautela que un error de red (pasa por `intentos_fallidos_detalle`, no marca
+nada de inmediato): sigue sin haber garantía de que no exista OTRA forma de
+bloqueo con el mismo síntoma que todavía no se ha observado.
 
 El guardado usa UPSERT (ON CONFLICT DO UPDATE) en vez de INSERT OR REPLACE:
 así una re-visita nunca borra las columnas de vulnerabilidad
@@ -454,21 +468,32 @@ def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
     estado_publicacion resultante es distinto al que tenía `fila` ANTES de
     esta visita - ej. activo->pausado, pausado->activo, activo->finalizado -
     no simplemente "no quedó activo", porque un pausado que sigue pausado no
-    es un cambio), 'no_disponible', 'captcha' o 'error'.
+    es un cambio), 'no_disponible', 'captcha', 'bloqueado' o 'error'.
 
     Usa la ruta principal (requests) de scrapers_base/02_scraper_detalle.py
     vía `sd.obtener_detalle_aviso`, que ya incluye reintento ante fallos
-    transitorios DENTRO de esta misma corrida. Si aun así devuelve "error",
-    se suma 1 al contador `intentos_fallidos_detalle` de este aviso (fallo
-    PERSISTENTE, entre corridas) y, si supera el umbral, se marca el aviso
-    como 'no_disponible' para que salga de la cola de pendientes.
+    transitorios DENTRO de esta misma corrida. Si aun así devuelve "error" O
+    "no_encontrado", se suma 1 al contador `intentos_fallidos_detalle` de
+    este aviso (fallo PERSISTENTE, entre corridas) y, si supera el umbral,
+    recién ahí se marca el aviso como 'no_disponible' para que salga de la
+    cola de pendientes.
 
-    Si en cambio devuelve "no_encontrado" (fetch OK, pero el HTML descargado
-    no corresponde al aviso - ver `_url_coincide_con_aviso` en el módulo
-    original), el aviso se marca 'no_disponible' DE INMEDIATO, sin pasar por
-    el contador de intentos_fallidos_detalle: a diferencia de un error de
-    red/HTTP, acá ya se confirmó con contenido real que la URL no lleva al
-    aviso, así que no hay nada que un reintento vaya a cambiar.
+    HISTORIAL (por qué "no_encontrado" ya NO se marca de inmediato): hasta
+    2026-08-09 este método asumía que "no_encontrado" (fetch OK, pero el
+    HTML descargado no corresponde al aviso - ver `_url_coincide_con_aviso`
+    en el módulo original) era prueba suficiente de que el aviso fue
+    eliminado, y lo marcaba 'no_disponible' sin pasar por el contador. Esa
+    asunción resultó falsa: entre 2026-08-05 y 2026-08-09 el sitio bloqueó
+    tráfico automatizado con un muro de verificación de cuenta que
+    disparaba exactamente esta misma condición para TODOS los avisos por
+    igual, y el método marcó ~1550 avisos activos como 'no_disponible' por
+    error, vaciando el dashboard. Ahora ese caso (bloqueo de todo el sitio)
+    se detecta aparte como "bloqueado" (ver más abajo) y corta la corrida
+    en vez de tocar ningún aviso; lo que queda bajo "no_encontrado" en este
+    punto es la categoría más ambigua ("esta URL puntual no corresponde al
+    aviso, por la razón que sea"), así que se trata con la misma cautela
+    que un error de red: hace falta que se repita varias corridas seguidas
+    antes de confiar en la conclusión.
     """
     id_aviso = fila["id_aviso"]
     url = fila["url"]
@@ -483,22 +508,24 @@ def visitar_aviso(con, fila, es_rechequeo: bool) -> str:
         registrar_captcha(con)
         return "captcha"
 
-    if resultado["resultado"] == "no_encontrado":
-        actualizar_estado_publicacion(con, id_aviso, "no_disponible")
-        log.warning(f"{id_aviso}: la página descargada no corresponde a este aviso ({resultado['motivo']}). "
-                    f"Se marca estado_publicacion='no_disponible' de inmediato.")
-        time.sleep(random.uniform(sd.DELAY_MIN, sd.DELAY_MAX))
-        return "no_disponible"
+    if resultado["resultado"] == "bloqueado":
+        log.error(f"Muro de verificación detectado en {url} ({resultado['motivo']}). El sitio está "
+                  f"bloqueando todo el tráfico automatizado, no es que {id_aviso} en particular haya "
+                  f"sido eliminado. Deteniendo la corrida ahora mismo sin tocar estado_publicacion. "
+                  f"Mismo cooldown que un CAPTCHA ({COOLDOWN_TRAS_CAPTCHA_MINUTOS} min) antes de "
+                  f"reintentar.")
+        registrar_captcha(con)
+        return "bloqueado"
 
-    if resultado["resultado"] == "error":
+    if resultado["resultado"] in ("error", "no_encontrado"):
         nuevo_contador = db.incrementar_intentos_fallidos_detalle(con, id_aviso)
-        log.warning(f"No se pudo obtener {id_aviso} tras reintentos ({resultado['motivo']}). "
+        log.warning(f"{id_aviso}: {resultado['resultado']} ({resultado['motivo']}). "
                     f"intentos_fallidos_detalle={nuevo_contador}.")
         if nuevo_contador > MAX_INTENTOS_FALLIDOS_DETALLE:
             actualizar_estado_publicacion(con, id_aviso, "no_disponible")
             log.warning(f"{id_aviso} superó MAX_INTENTOS_FALLIDOS_DETALLE={MAX_INTENTOS_FALLIDOS_DETALLE} "
-                        f"fallos consecutivos. Se marca estado_publicacion='no_disponible' y sale de "
-                        f"la cola de pendientes.")
+                        f"corridas consecutivas sin poder confirmar contenido válido. Se marca "
+                        f"estado_publicacion='no_disponible' y sale de la cola de pendientes.")
         time.sleep(random.uniform(sd.DELAY_MIN, sd.DELAY_MAX))
         return "error"
 
@@ -553,7 +580,12 @@ def scrapear_detalle_incremental(con) -> dict:
 
     for _, fila in pendientes_nuevos.iterrows():
         resultado = visitar_aviso(con, fila, es_rechequeo=False)
-        if resultado == "captcha":
+        if resultado in ("captcha", "bloqueado"):
+            # "bloqueado" comparte la misma bandera/cooldown que "captcha":
+            # ambos significan "el sitio nos está frenando a todos por
+            # igual ahora mismo", así que la respuesta correcta es la misma
+            # (cortar la corrida completa y esperar), aunque la causa raíz
+            # sea distinta (ver visitar_aviso).
             detenido_por_captcha = True
             break
         if resultado == "ok":
@@ -564,7 +596,7 @@ def scrapear_detalle_incremental(con) -> dict:
     if not detenido_por_captcha:
         for _, fila in pendientes_rechequeo.iterrows():
             resultado = visitar_aviso(con, fila, es_rechequeo=True)
-            if resultado == "captcha":
+            if resultado in ("captcha", "bloqueado"):
                 detenido_por_captcha = True
                 break
             if resultado in ("ok", "cambio_estado"):

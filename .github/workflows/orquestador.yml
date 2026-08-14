@@ -1,14 +1,18 @@
 name: Orquestador cada 4h - Producción
 
-# PAUSADO 2026-08-09: portalinmobiliario.com empezó a exigir sesión
-# autenticada (muro "negative_traffic" en /gz/account-verification) para
-# cualquier request sin cookies de navegador real, incluso la portada. Desde
-# el 2026-08-05 esto hizo que 02_scraper_detalle_incremental.py marcara en
-# masa avisos activos como 'no_disponible' (falso positivo: interpretaba el
-# muro como "el aviso fue eliminado"). Se deshabilita el cron hasta resolver
-# la forma de scrapear el sitio; el trigger manual (workflow_dispatch) queda
-# para poder retomar a mano cuando corresponda.
+# REACTIVADO 2026-08-10: el muro "negative_traffic" en /gz/account-verification
+# que forzó la pausa del 2026-08-09 ya no está activo (confirmado en vivo).
+# Antes de reactivar se corrigió la causa de fondo del incidente: un mismatch
+# de canonical/og:url ya no se interpreta como "el aviso fue eliminado" de
+# inmediato - ahora se detecta aparte si el sitio está redirigiendo TODO el
+# tráfico al muro (resultado "bloqueado" en scrapers_base/02_scraper_detalle.py),
+# lo que corta la corrida sin tocar estado_publicacion, y el resto de los
+# mismatches pasan por el contador intentos_fallidos_detalle en vez de
+# marcarse de inmediato (ver 02_scraper_detalle_incremental.py). Si el sitio
+# vuelve a bloquear, esto ya no debería poder vaciar la base de nuevo.
 on:
+  schedule:
+    - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
   workflow_dispatch:         # permite correrlo manualmente desde la pestaña Actions
 
 # Ya no se pushea nada al repo (la BD vive en Supabase) - explícito solo

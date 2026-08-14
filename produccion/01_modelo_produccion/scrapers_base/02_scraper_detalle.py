@@ -832,6 +832,25 @@ def extraer_detalle(page) -> dict:
     }
 
 
+# El sitio, ante tráfico que clasifica como automatizado, puede redirigir
+# CUALQUIER URL (incluida la portada) a un muro de login/verificación de
+# cuenta en vez de devolver el contenido pedido - con status 200 y sin
+# CAPTCHA visible, así que ni el chequeo de status code ni `hay_captcha` lo
+# detectan. Confirmado en producción: entre 2026-08-05 y 2026-08-09 esto
+# hizo que `_url_coincide_con_aviso` fallara por igual para TODOS los
+# avisos visitados, y el llamador (antes de este fix) lo interpretaba como
+# "cada uno de estos avisos específicos fue eliminado" en vez de "el sitio
+# está bloqueando todo el tráfico por igual" - marcó ~1550 avisos activos
+# como 'no_disponible' por error. Se detecta por la URL final tras
+# redirects (no por contenido del body) porque es la señal más específica
+# y estable que se observó.
+RUTAS_MURO_VERIFICACION = ("/gz/account-verification", "/jms/mlc/lgz/login", "/registration-pi")
+
+
+def _es_muro_verificacion(url_final: str) -> bool:
+    return any(ruta in url_final for ruta in RUTAS_MURO_VERIFICACION)
+
+
 def _url_coincide_con_aviso(html: str, id_aviso: str) -> bool:
     """
     Confirma que la página descargada realmente corresponde a `id_aviso`, y no
@@ -947,7 +966,7 @@ def obtener_detalle_aviso(url: str, id_aviso: str, comuna: str, tipo_propiedad: 
     este módulo), para no duplicar la lógica de fetch+reintento.
 
     Devuelve un dict con:
-      "resultado": "ok" | "captcha" | "error" | "no_encontrado"
+      "resultado": "ok" | "captcha" | "bloqueado" | "error" | "no_encontrado"
       "datos": dict de extraer_detalle() + distancias (solo si resultado == "ok")
       "estado_json": JSON de extraer_json_estado_pagina(), ya parseado (solo si
           resultado == "ok") - se expone para que un llamador (ej. el scraper
@@ -956,12 +975,26 @@ def obtener_detalle_aviso(url: str, id_aviso: str, comuna: str, tipo_propiedad: 
       "status_http": último código HTTP observado (o None si fue un error de red)
       "motivo": descripción corta del fallo (solo si resultado != "ok")
 
+    "bloqueado" es distinto de "no_encontrado" aunque ambos se detectan sin
+    un status HTTP distinto de 200: "bloqueado" significa que el SITIO
+    ENTERO está redirigiendo a un muro de verificación (ver
+    `_es_muro_verificacion`), no que este aviso en particular haya sido
+    eliminado - se resuelve en el primer intento igual que un CAPTCHA
+    (reintentar la misma URL no va a cambiar nada mientras el bloqueo esté
+    activo) y el llamador debe cortar la corrida completa, no marcar avisos
+    como no disponibles.
+
     "no_encontrado" es distinto de "error": el fetch funcionó (status 200,
-    sin CAPTCHA) pero `_url_coincide_con_aviso` determinó que el HTML devuelto
-    no es el del aviso pedido - típicamente porque el aviso ya no existe y el
-    sitio respondió con otra página (ver esa función). No tiene sentido
-    reintentar (la misma URL va a devolver lo mismo), así que no pasa por el
-    loop de reintentos: se resuelve en el primer intento.
+    sin CAPTCHA, sin muro de verificación) pero `_url_coincide_con_aviso`
+    determinó que el HTML devuelto no es el del aviso pedido -
+    típicamente porque el aviso ya no existe y el sitio respondió con otra
+    página (ver esa función). No tiene sentido reintentar dentro de esta
+    misma corrida (la misma URL va a devolver lo mismo), así que no pasa
+    por el loop de reintentos: se resuelve en el primer intento. Pero a
+    diferencia de una versión anterior de este pipeline, el LLAMADOR ya no
+    trata esto como confirmación inmediata de eliminación (ver
+    02_scraper_detalle_incremental.py) - un mismatch de canonical/og:url
+    puede tener otras causas además de "el aviso ya no existe".
     """
     referer = construir_referer(comuna, tipo_propiedad)
     intentos_totales = 1 + REINTENTOS_TRAS_ERROR
@@ -976,6 +1009,16 @@ def obtener_detalle_aviso(url: str, id_aviso: str, comuna: str, tipo_propiedad: 
             if resp.status_code != 200:
                 ultimo_motivo = f"status HTTP {resp.status_code}"
                 raise ValueError(ultimo_motivo)
+
+            if _es_muro_verificacion(resp.url):
+                log.error(f"Muro de verificación de cuenta detectado al pedir {url} "
+                          f"(redirigido a {resp.url}). Esto es el SITIO bloqueando tráfico "
+                          f"automatizado en general, no que {id_aviso} en particular haya sido "
+                          f"eliminado.")
+                return {
+                    "resultado": "bloqueado", "status_http": ultimo_status,
+                    "motivo": f"redirigido a muro de verificación ({resp.url})",
+                }
 
             pagina = PaginaHTMLEstatico(resp.text)
 

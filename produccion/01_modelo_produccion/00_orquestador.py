@@ -232,8 +232,10 @@ def main():
         r["avisos_rechequeados"] = resumen["rechequeos_procesados"]
         r["avisos_cambio_estado"] = resumen["cambios_estado"]
         if resumen["detenido_por_captcha"]:
-            log.warning("scraper_detalle se detuvo por CAPTCHA. Se continúa con las etapas "
-                        "siguientes sobre lo ya procesado; la corrida queda como 'parcial'.")
+            log.warning("scraper_detalle se detuvo por CAPTCHA o por un muro de verificación del "
+                        "sitio (el nombre de la bandera es histórico, cubre ambos casos - ver "
+                        "visitar_aviso en 02_scraper_detalle_incremental.py). Se continúa con las "
+                        "etapas siguientes sobre lo ya procesado; la corrida queda como 'parcial'.")
             hubo_corte_parcial = True
 
         etapa_actual.valor = "vulnerabilidad"
