@@ -19,9 +19,19 @@ from styles import (
     ETIQUETA_LABELS,
 )
 
-# Tiles Positron de CARTO: mismo estilo visual que pdk.map_styles.LIGHT, sin
-# requerir token (a diferencia de Mapbox).
-_BASEMAP_TILES_URL = "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+# Basemap gris claro de Esri, en dos capas: el fondo y las etiquetas (nombres
+# de comunas y calles), que Esri sirve por separado.
+#
+# Antes se usaba Positron de CARTO (basemaps.cartocdn.com/light_all/...), que
+# dejó de ser gratuito sin registro: ahora devuelve los tiles con la marca de
+# agua "API KEY REQUIRED" estampada encima. Esri los sirve sin key ni registro,
+# pidiendo solo la atribución del pie del mapa.
+#
+# Ojo con el orden de las coordenadas: Esri usa {z}/{y}/{x}, no {z}/{x}/{y}.
+_ESRI_CANVAS = "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas"
+_BASEMAP_TILES_URL = f"{_ESRI_CANVAS}/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}"
+_BASEMAP_LABELS_URL = f"{_ESRI_CANVAS}/World_Light_Gray_Reference/MapServer/tile/{{z}}/{{y}}/{{x}}"
+_BASEMAP_ATRIBUCION = "Esri, HERE, Garmin, © OpenStreetMap contributors"
 
 def _clp(value: float) -> str:
     return f"{value:,.0f}".replace(",", ".")
@@ -228,6 +238,12 @@ def render_map(df: pd.DataFrame) -> None:
       cursor: pointer; padding: 0;
   }}
   .map-popup-close:hover {{ background: rgba(0,0,0,0.16); }}
+  /* Atribución exigida por los términos de uso de los tiles de Esri. */
+  .map-attribution {{
+      position: absolute; right: 0; bottom: 0; z-index: 5;
+      background: rgba(255,255,255,0.8); padding: 1px 5px;
+      font-size: 10px; color: {COLOR_TEXT_BODY}; border-top-left-radius: 4px;
+  }}
 </style>
 </head>
 <body>
@@ -237,6 +253,7 @@ def render_map(df: pd.DataFrame) -> None:
     <button id="popup-close" class="map-popup-close" aria-label="Cerrar">×</button>
     <div id="popup-content"></div>
   </div>
+  <div class="map-attribution">{_BASEMAP_ATRIBUCION}</div>
 </div>
 <script>
 const DATA = {data_json};
@@ -301,17 +318,23 @@ popupClose.addEventListener('click', (e) => {{
 
 const {{ DeckGL, ScatterplotLayer, TileLayer, BitmapLayer, WebMercatorViewport }} = deck;
 
-const basemap = new TileLayer({{
-  id: 'basemap',
-  data: '{_BASEMAP_TILES_URL}',
-  minZoom: 0,
-  maxZoom: 19,
-  tileSize: 256,
-  renderSubLayers: props => {{
-    const {{ bbox: {{ west, south, east, north }} }} = props.tile;
-    return new BitmapLayer(props, {{ data: null, image: props.data, bounds: [west, south, east, north] }});
-  }},
-}});
+function tileLayer(id, url) {{
+  return new TileLayer({{
+    id: id,
+    data: url,
+    minZoom: 0,
+    maxZoom: 16,
+    tileSize: 256,
+    renderSubLayers: props => {{
+      const {{ bbox: {{ west, south, east, north }} }} = props.tile;
+      return new BitmapLayer(props, {{ data: null, image: props.data, bounds: [west, south, east, north] }});
+    }},
+  }});
+}}
+
+// Dos capas: el fondo gris y, encima, los nombres de comunas y calles.
+const basemap = tileLayer('basemap', '{_BASEMAP_TILES_URL}');
+const basemapLabels = tileLayer('basemap-labels', '{_BASEMAP_LABELS_URL}');
 
 const avisos = new ScatterplotLayer({{
   id: 'avisos',
@@ -332,7 +355,7 @@ new DeckGL({{
   container: 'map',
   initialViewState: {{ longitude: {center_lon}, latitude: {center_lat}, zoom: {zoom}, pitch: 0, bearing: 0 }},
   controller: {{ doubleClickZoom: false }},
-  layers: [basemap, avisos],
+  layers: [basemap, basemapLabels, avisos],
   getTooltip: ({{ object }}) => object && !selected ? {{
     html: object.tooltip,
     style: {{ backgroundColor: 'white', color: '{COLOR_TEXT_TITLE}', fontSize: '13px' }}

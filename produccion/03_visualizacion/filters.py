@@ -1,20 +1,50 @@
 """Sidebar de filtros y lógica de filtrado del dataframe."""
 
+import math
+
 import pandas as pd
 import streamlit as st
 
 from data import AMENITY_COLUMNS
 
-_ROOM_BUCKETS = ["1", "2", "3", "4+"]
+# El bucket "0" existe porque `_procesar_avisos` convierte dormitorios nulo en
+# 0, y sin un checkbox que lo represente esos avisos quedaban excluidos SIEMPRE
+# del buscador, sin importar qué filtros estuvieran marcados: `_room_bucket(0)`
+# devolvía "0", que no estaba en esta lista, así que el `.isin()` de
+# `apply_atributo_filters` nunca los tomaba. Eran 48 avisos invisibles al
+# 2026-09-20 (detectado al comparar totales contra el frontend React).
+_ROOM_BUCKETS = ["0", "1", "2", "3", "4+"]
+
+# "0" no se muestra como "0": el dato no es "cero dormitorios", es "el aviso no
+# lo informa".
+_ROOM_LABELS = {"0": "Sin especificar", "1": "1", "2": "2", "3": "3", "4+": "4+"}
 
 
 def _room_bucket(n: int) -> str:
     return "4+" if n >= 4 else str(n)
 
 
+def _rango_precio(df: pd.DataFrame) -> tuple[int, int]:
+    """Extremos del slider de precio, redondeados HACIA AFUERA.
+
+    Con `int()` el máximo se truncaba: un precio de $2.521.710,45 daba un tope
+    de 2.521.710 y ese aviso -el más caro del dataset- quedaba fuera de su
+    propio rango máximo, sin forma de verlo ni con el slider al tope.
+    """
+    return math.floor(df["precio"].min()), math.ceil(df["precio"].max())
+
+
+def _rango_superficie(df: pd.DataFrame) -> tuple[int, int]:
+    """Mismo criterio que `_rango_precio`: redondeo hacia afuera."""
+    return (
+        math.floor(df["superficie_util_m2"].min()),
+        math.ceil(df["superficie_util_m2"].max()),
+    )
+
+
 def _default_filters(df: pd.DataFrame) -> dict:
-    price_min, price_max = int(df["precio"].min()), int(df["precio"].max())
-    sup_min, sup_max = int(df["superficie_util_m2"].min()), int(df["superficie_util_m2"].max())
+    price_min, price_max = _rango_precio(df)
+    sup_min, sup_max = _rango_superficie(df)
     return {
         "f_price": (price_min, price_max),
         "f_superficie": (sup_min, sup_max),
@@ -51,7 +81,7 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         st.button("Limpiar filtros", on_click=_reset_filters, args=(df,), use_container_width=True)
 
         st.markdown("**Precio**")
-        price_min, price_max = int(df["precio"].min()), int(df["precio"].max())
+        price_min, price_max = _rango_precio(df)
         st.slider(
             "Rango de precio ($)",
             min_value=price_min,
@@ -64,12 +94,18 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         st.markdown("**Dormitorios**")
         dorm_counts = df["dormitorios"].apply(_room_bucket).value_counts()
         for b in _ROOM_BUCKETS:
-            st.checkbox(f"{b} ({dorm_counts.get(b, 0)})", key=f"f_dorm_{b}")
+            # El bucket "Sin especificar" se oculta si ningún aviso cae ahí, para
+            # no ofrecer un filtro que no puede cambiar el resultado.
+            if b == "0" and dorm_counts.get(b, 0) == 0:
+                continue
+            st.checkbox(f"{_ROOM_LABELS[b]} ({dorm_counts.get(b, 0)})", key=f"f_dorm_{b}")
 
         st.markdown("**Baños**")
         banos_counts = df["banos"].apply(_room_bucket).value_counts()
         for b in _ROOM_BUCKETS:
-            st.checkbox(f"{b} ({banos_counts.get(b, 0)})", key=f"f_banos_{b}")
+            if b == "0" and banos_counts.get(b, 0) == 0:
+                continue
+            st.checkbox(f"{_ROOM_LABELS[b]} ({banos_counts.get(b, 0)})", key=f"f_banos_{b}")
 
         st.markdown("**Comuna**")
         st.multiselect(
@@ -80,7 +116,7 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         )
 
         st.markdown("**Superficie útil (m²)**")
-        sup_min, sup_max = int(df["superficie_util_m2"].min()), int(df["superficie_util_m2"].max())
+        sup_min, sup_max = _rango_superficie(df)
         st.slider(
             "Superficie útil (m²)",
             min_value=sup_min,
