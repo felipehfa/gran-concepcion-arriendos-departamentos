@@ -10,9 +10,27 @@ name: Orquestador cada 4h - Producción
 # mismatches pasan por el contador intentos_fallidos_detalle en vez de
 # marcarse de inmediato (ver 02_scraper_detalle_incremental.py). Si el sitio
 # vuelve a bloquear, esto ya no debería poder vaciar la base de nuevo.
+# PAUSADO 2026-10-17: el proyecto se deja en pausa para enfocarse en otros
+# trabajos. La última corrida que trajo datos fue la #401 del 2026-09-30; desde
+# entonces Portal Inmobiliario devuelve páginas vacías a las IPs de datacenter
+# de GitHub Actions. No es un 403 ni un CAPTCHA -que el scraper sí detectaría-,
+# sino HTML válido sin tarjetas, así que el pipeline lo lee como "no hay más
+# resultados", corta limpio y termina en `success` sin traer nada. Comprobado
+# el 2026-10-17: el mismo código, a la misma hora, desde una IP residencial
+# devuelve 48 avisos por página (59 de 96 sin registrar en la base), mientras
+# la corrida #445 desde Actions recorrió 100 páginas y las encontró todas
+# vacías.
+#
+# El `schedule` queda comentado en vez de borrado para poder reactivarlo tal
+# cual. `workflow_dispatch` se mantiene: permite correrlo a mano para
+# comprobar si el bloqueo se levantó.
+#
+# Para retomar hay que resolver primero el origen de la petición: un
+# self-hosted runner con IP residencial, una tarea programada local, o un
+# proxy residencial. Reactivar el cron sin eso solo acumula corridas vacías.
 on:
-  schedule:
-    - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
+  # schedule:
+  #   - cron: '0 */4 * * *'   # 6 corridas al día, en punto (UTC)
   workflow_dispatch:         # permite correrlo manualmente desde la pestaña Actions
 
 # Ya no se pushea nada al repo (la BD vive en Supabase) - explícito solo

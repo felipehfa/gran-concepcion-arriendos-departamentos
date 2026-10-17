@@ -1,5 +1,35 @@
 # Gran Concepción Rentals
 
+> ## ⏸️ Proyecto en pausa desde el 30 de septiembre de 2026
+>
+> El pipeline dejó de recolectar datos el **2026-09-30**. La última corrida que trajo avisos
+> fue la `#401` de esa fecha; desde entonces Portal Inmobiliario **devuelve páginas vacías a las
+> IPs de datacenter** de GitHub Actions, donde corría el orquestador.
+>
+> No es un bloqueo explícito: no hay 403 ni CAPTCHA —que el scraper sí detecta y reporta—, sino
+> HTML válido sin tarjetas de resultado. El pipeline lo interpreta como "no hay más resultados",
+> corta de forma limpia y la corrida termina en `success`. Por eso el problema pasó inadvertido
+> 17 días: **el workflow nunca falló, simplemente dejó de traer datos**.
+>
+> Comprobado el 2026-10-17: el mismo código, a la misma hora, desde una IP residencial devuelve
+> 48 avisos por página (59 de 96 sin registrar en la base), mientras la corrida desde Actions
+> recorrió 100 páginas y las encontró todas vacías. Todo lo que solo consulta Postgres siguió
+> funcionando; todo lo que sale a internet volvía vacío.
+>
+> **Estado actual:**
+> - El `schedule` del orquestador está comentado en `.github/workflows/orquestador.yml`.
+>   `workflow_dispatch` se mantiene para poder comprobar a mano si el bloqueo se levantó.
+> - Las corridas del período roto (`#402` en adelante) se borraron de la tabla `corridas`.
+> - La base conserva los datos hasta el 2026-09-30. El dashboard sigue en línea, pero **muestra
+>   avisos y predicciones congelados en esa fecha**.
+>
+> **Para retomar** hay que resolver primero desde dónde salen las peticiones: un self-hosted
+> runner con IP residencial, una tarea programada en una máquina propia, o un proxy residencial.
+> Reactivar el cron sin eso solo acumula corridas vacías.
+>
+> El proyecto se deja en pausa para enfocarse en otros trabajos, no por un problema de modelo ni
+> de arquitectura: todo lo documentado abajo sigue siendo válido y reproducible.
+
 ## Resumen ejecutivo
 
 Pipeline completo de datos —desde scraping hasta modelamiento— para estimar el **costo total
